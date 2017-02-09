@@ -8,8 +8,20 @@
 -- | An implementation of a hypergraph.
 
 
-module Data.DAG
+module NLP.Departage.Hype
 (
+-- * Types
+  Hype
+
+-- * Primitive Operations
+, nodes
+, arcs
+, features
+, head
+, tail
+, ingoing
+, outgoing
+
 -- -- * Types
 --   DAG
 -- , NodeID (..)
@@ -56,6 +68,7 @@ module Data.DAG
 ) where
 
 
+import Prelude hiding (head, tail)
 -- import           Control.Applicative ((<$>))
 -- import qualified Data.Foldable as F
 -- import qualified Data.Traversable as T
@@ -73,6 +86,50 @@ import qualified Data.Map.Strict as M
 ------------------------------------------------------------------
 -- Types
 ------------------------------------------------------------------
+
+
+-- | A hypergraph parametrized by the type of nodes `i`, the type of arcs `j`,
+-- and the type of features `f`.
+data Hype i j f = Hype
+
+
+-- | Retrieve the set of all nodes.
+nodes :: Hype i j f -> S.Set i
+nodes = undefined
+
+
+-- | Retrieve the set of all arcs.
+arcs :: Hype i j f -> S.Set f
+arcs = undefined
+
+
+-- | Model features assigned to a given edge, together with the corresponding
+-- multiplicities.
+--
+-- NOTE: the multiplicities should be actually (positive) natural numbers, but
+-- we do not enforce it (maybe it will be fun to use real numbers instead).
+features :: j -> Hype i j f -> M.Map f Double
+features = undefined
+
+
+-- | A head of a given edge.
+head :: j -> Hype i j f -> i
+head = undefined
+
+
+-- | A tail of a given edge, which is basically a set of nodes.
+tail :: j -> Hype i j f -> S.Set i
+tail = undefined
+
+
+-- | The set of arcs ingoing to a given node.
+ingoing :: i -> Hype i j f -> S.Set j
+ingoing = undefined
+
+
+-- | The set of arcs outgoing from a given node.
+outgoing :: i -> Hype i j f -> S.Set j
+outgoing = undefined
 
 
 -- -- | A directed acyclic graph (DAG) with nodes of type `a` and
