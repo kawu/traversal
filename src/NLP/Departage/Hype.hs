@@ -5,15 +5,19 @@ module NLP.Departage.Hype
 (
 -- * Types
   Hype
+, Node (..)
+, Arc (..)
 
--- * Primitive Operations
+-- * Primitive operations
 , nodes
-, arcs
-, label
+-- , arcs
 , head
 , tail
 , ingoing
 , outgoing
+
+-- * Intermediate operations
+, final
 
 -- -- * Types
 --   DAG
@@ -68,8 +72,9 @@ import Prelude hiding (head, tail)
 -- import qualified Data.Array as A
 -- -- import qualified Data.Vector as V
 
+import           Data.Ix (Ix)
 import qualified Data.Set as S
-import qualified Data.Map.Strict as M
+-- import qualified Data.Map.Strict as M
 
 -- import Data.Binary (Binary, get, put, putWord8, getWord8)
 -- import Data.Vector.Binary ()
@@ -81,58 +86,74 @@ import qualified Data.Map.Strict as M
 ------------------------------------------------------------------
 
 
--- | A hypergraph parametrized by the type of nodes `i`, the type of arcs `j`,
--- and the type of labels assigned to arcs `e`.
-data Hype i j e = Hype
+-- | A hypergraph parametrized by the type of nodes `i`, the type of arcs `j`.
+data Hype = Hype
+
+
+-- | A node.  We use a predetermined type because
+-- data-memocombinators do not work with any `Ord` instances.
+newtype Node = Node {unNode :: Int}
+  deriving (Show, Read, Eq, Ord, Ix)
+
+
+-- | An arc.  We use a predetermined type because
+-- data-memocombinators do not work with any `Ord` instances.
+newtype Arc = Arc {unArc :: Int}
+  deriving (Show, Read, Eq, Ord, Ix)
 
 
 -- | Retrieve the set of all nodes.
-nodes :: Hype i j e -> S.Set i
+nodes :: Hype -> S.Set Node
 nodes = undefined
 
 
--- | Retrieve the set of all arcs.
-arcs :: Hype i j e -> S.Set j
-arcs = undefined
-
-
--- | Model features assigned to a given edge, together with the corresponding
--- multiplicities.
---
--- NOTE: the multiplicities should be actually (positive) natural numbers, but
--- we do not enforce it (maybe it will be fun to use real numbers instead).
--- features :: j -> Hype i j e -> M.Map f Double
--- features = undefined
-label :: j -> Hype i j e -> f
-label = undefined
+-- -- | Retrieve the set of all arcs.
+-- NOTE: That's so easy to implement that there seems no point to
+-- provide it as an atomic operation...
+-- arcs :: Hype -> S.Set Arc
+-- arcs = undefined
 
 
 -- | A head of a given edge.
-head :: j -> Hype i j e -> i
+head :: Arc -> Hype -> Node
 head = undefined
 
 
 -- | A tail of a given edge, which is basically a set of nodes.
-tail :: j -> Hype i j e -> S.Set i
+tail :: Arc -> Hype -> S.Set Node
 tail = undefined
 
 
 -- | The set of arcs ingoing to a given node.
-ingoing :: i -> Hype i j e -> S.Set j
+ingoing :: Node -> Hype -> S.Set Arc
 ingoing = undefined
 
 
 -- | The set of arcs outgoing from a given node.
-outgoing :: i -> Hype i j e -> S.Set j
+outgoing :: Node -> Hype -> S.Set Arc
 outgoing = undefined
 
 
-
 ------------------------------------------------------------------
--- Dynamic programming
+-- Intermediate
 ------------------------------------------------------------------
 
 
+-- | Return the set of final node.
+--
+-- TODO: reimplement by using `outgoing`.
+--
+-- WARNING: in practice, we might need to make sure that these nodes
+-- actually represent valid solutions, and not just parsing
+-- dead-ends. 
+final :: Hype -> S.Set Node
+final hype =
+  nodes hype `S.difference` nonFinal
+  where
+    nonFinal = S.unions $ do
+      i <- S.toList (nodes hype)
+      j <- S.toList (ingoing i hype)
+      return $ tail j hype
 
 
 
