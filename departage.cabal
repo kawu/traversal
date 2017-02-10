@@ -27,6 +27,7 @@ library
 
     exposed-modules:
         NLP.Departage.Hype
+      , NLP.Departage.CRF
 
     -- other-modules:
 

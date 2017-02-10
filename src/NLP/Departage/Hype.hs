@@ -1,10 +1,3 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveFoldable #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
-
 -- | An implementation of a hypergraph.
 
 
@@ -16,7 +9,7 @@ module NLP.Departage.Hype
 -- * Primitive Operations
 , nodes
 , arcs
-, features
+, label
 , head
 , tail
 , ingoing
@@ -89,17 +82,17 @@ import qualified Data.Map.Strict as M
 
 
 -- | A hypergraph parametrized by the type of nodes `i`, the type of arcs `j`,
--- and the type of features `f`.
-data Hype i j f = Hype
+-- and the type of labels assigned to arcs `e`.
+data Hype i j e = Hype
 
 
 -- | Retrieve the set of all nodes.
-nodes :: Hype i j f -> S.Set i
+nodes :: Hype i j e -> S.Set i
 nodes = undefined
 
 
 -- | Retrieve the set of all arcs.
-arcs :: Hype i j f -> S.Set f
+arcs :: Hype i j e -> S.Set j
 arcs = undefined
 
 
@@ -108,28 +101,40 @@ arcs = undefined
 --
 -- NOTE: the multiplicities should be actually (positive) natural numbers, but
 -- we do not enforce it (maybe it will be fun to use real numbers instead).
-features :: j -> Hype i j f -> M.Map f Double
-features = undefined
+-- features :: j -> Hype i j e -> M.Map f Double
+-- features = undefined
+label :: j -> Hype i j e -> f
+label = undefined
 
 
 -- | A head of a given edge.
-head :: j -> Hype i j f -> i
+head :: j -> Hype i j e -> i
 head = undefined
 
 
 -- | A tail of a given edge, which is basically a set of nodes.
-tail :: j -> Hype i j f -> S.Set i
+tail :: j -> Hype i j e -> S.Set i
 tail = undefined
 
 
 -- | The set of arcs ingoing to a given node.
-ingoing :: i -> Hype i j f -> S.Set j
+ingoing :: i -> Hype i j e -> S.Set j
 ingoing = undefined
 
 
 -- | The set of arcs outgoing from a given node.
-outgoing :: i -> Hype i j f -> S.Set j
+outgoing :: i -> Hype i j e -> S.Set j
 outgoing = undefined
+
+
+
+------------------------------------------------------------------
+-- Dynamic programming
+------------------------------------------------------------------
+
+
+
+
 
 
 -- -- | A directed acyclic graph (DAG) with nodes of type `a` and
