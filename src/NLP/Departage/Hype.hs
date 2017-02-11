@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 -- | An implementation of a hypergraph.
 
 
@@ -18,6 +20,13 @@ module NLP.Departage.Hype
 
 -- * Intermediate operations
 , final
+
+-- * Construction
+, fromList
+
+-- * Tests
+-- , testHype
+
 
 -- -- * Types
 --   DAG
@@ -72,9 +81,10 @@ import Prelude hiding (head, tail)
 -- import qualified Data.Array as A
 -- -- import qualified Data.Vector as V
 
+-- import           Data.Maybe (maybeToList)
 import           Data.Ix (Ix)
 import qualified Data.Set as S
--- import qualified Data.Map.Strict as M
+import qualified Data.Map.Strict as M
 
 -- import Data.Binary (Binary, get, put, putWord8, getWord8)
 -- import Data.Vector.Binary ()
@@ -88,6 +98,10 @@ import qualified Data.Set as S
 
 -- | A hypergraph parametrized by the type of nodes `i`, the type of arcs `j`.
 data Hype = Hype
+  { nodeMap :: M.Map Node NodeStr
+    -- ^ The set of underlying nodes
+  , arcMap  :: M.Map Arc ArcStr
+  } deriving (Show, Eq, Ord)
 
 
 -- | A node.  We use a predetermined type because
@@ -102,36 +116,53 @@ newtype Arc = Arc {unArc :: Int}
   deriving (Show, Read, Eq, Ord, Ix)
 
 
+-- | Node internal structure.
+data NodeStr = NodeStr
+  { insSet :: S.Set Arc
+    -- ^ Set of ingoing arcs
+  , outSet :: S.Set Arc
+    -- ^ Set of outgoing arcs
+  } deriving (Show, Eq, Ord)
+
+
+-- | Arc internal structure.
+data ArcStr = ArcStr
+  { arcHead :: Node
+  , arcTail :: S.Set Node
+  } deriving (Show, Eq, Ord)
+
+
 -- | Retrieve the set of all nodes.
 nodes :: Hype -> S.Set Node
-nodes = undefined
-
-
--- -- | Retrieve the set of all arcs.
--- NOTE: That's so easy to implement that there seems no point to
--- provide it as an atomic operation...
--- arcs :: Hype -> S.Set Arc
--- arcs = undefined
+nodes = M.keysSet . nodeMap
 
 
 -- | A head of a given edge.
 head :: Arc -> Hype -> Node
-head = undefined
+head j =
+  maybe (error errMsg) arcHead . M.lookup j . arcMap
+  where errMsg = "Hype.head: unknown arc"
 
 
 -- | A tail of a given edge, which is basically a set of nodes.
 tail :: Arc -> Hype -> S.Set Node
-tail = undefined
+tail j =
+  maybe (error errMsg) arcTail . M.lookup j . arcMap
+  where errMsg = "Hype.tail: unknown arc"
 
 
 -- | The set of arcs ingoing to a given node.
 ingoing :: Node -> Hype -> S.Set Arc
-ingoing = undefined
+ingoing i =
+  maybe (error errMsg) insSet . M.lookup i . nodeMap
+  where errMsg = "Hype.ingoing: unknown node"
 
 
 -- | The set of arcs outgoing from a given node.
 outgoing :: Node -> Hype -> S.Set Arc
-outgoing = undefined
+outgoing i =
+  maybe (error errMsg) outSet . M.lookup i . nodeMap
+  where errMsg = "Hype.outgoing: unknown node"
 
 
 ------------------------------------------------------------------
@@ -156,6 +187,52 @@ final hype =
       return $ tail j hype
 
 
+------------------------------------------------------------------
+-- Construction
+------------------------------------------------------------------
+
+
+-- | Create a hypergraph from a list of nodes together with the
+-- incoming arcs.
+fromList :: [(Node, M.Map Arc (S.Set Node))] -> Hype 
+fromList xs = Hype
+  newNodeMap
+  newArcMap
+  where
+    newArcMap = M.fromList
+      [ (arc, ArcStr {arcHead = node, arcTail = tail'})
+      | (node, ingo) <- xs
+      , (arc, tail') <- M.toList ingo ]
+    newNodeMap = M.fromList
+      [ (node, NodeStr {insSet = insgo, outSet = outgo})
+      | (node, insgo) <- M.toList insNodeMap
+      , let outgo = maybe S.empty id (M.lookup node outNodeMap) ]
+    insNodeMap = M.fromList
+      [ (node, M.keysSet ingo)
+      | (node, ingo) <- xs ]
+    outNodeMap = M.fromListWith S.union
+      [ (node, S.singleton arc)
+      | (arc, ArcStr{..}) <- M.toList newArcMap
+      , node <- S.toList arcTail ]
+
+
+------------------------------------------------------------------
+-- Tests
+------------------------------------------------------------------
+
+
+-- testHype :: Hype
+-- testHype = fromList
+--   [ ( Node 1, M.empty )
+--   , ( Node 2, M.empty )
+--   , ( Node 3, M.fromList
+--       [ (Arc 1, S.fromList [Node 1])
+--       , (Arc 2, S.fromList [Node 1, Node 2]) ]
+--     )
+--   , ( Node 4, M.fromList
+--       [ (Arc 3, S.fromList [Node 2, Node 3]) ]
+--     )
+--   ]
 
 
 -- -- | A directed acyclic graph (DAG) with nodes of type `a` and

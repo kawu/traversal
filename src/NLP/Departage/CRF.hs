@@ -1,5 +1,16 @@
 module NLP.Departage.CRF
 (
+  inside
+, outside
+, normFactor
+, marginals
+, expected
+
+-- * Tests
+, testHype
+, testCRF
+, testFeat
+, testPhi
 ) where
 
 
@@ -71,7 +82,9 @@ type Feat a f = a -> M.Map f Int
 ------------------------------------------------------------------
 
 
--- | A potential of a given arc.
+-- | A potential of a given arc.  Should specify a number between 0
+-- (very improbable arc) and positive infinitive (particularly
+-- plausible arc), while value 1 is neutral.
 potential :: Fractional v => ExpCRF f v -> Feat Arc f -> Arc -> v
 potential crf featMap arc = product
   [ crf feat ^ occNum
@@ -163,3 +176,60 @@ expected hype probOn featMap = M.unionsWith (+) $ do
   return $ M.fromListWith (+)
     [ (feat, prob * fromIntegral occNum)
     | (feat, occNum) <- M.toList (featMap j) ]
+
+
+------------------------------------------------------------------
+-- Tests
+------------------------------------------------------------------
+
+
+testHype :: Hype
+testHype = H.fromList
+  [ ( Node 1, M.empty )
+  , ( Node 2, M.empty )
+  , ( Node 3, M.fromList
+      [ (Arc 1, S.fromList [Node 1]) ]
+    )
+  , ( Node 4, M.fromList
+      [ (Arc 2, S.fromList [Node 2, Node 3]) ]
+    )
+  , ( Node 5, M.empty )
+  , ( Node 6, M.fromList
+      [ (Arc 3, S.fromList [Node 2, Node 5]) ]
+    )
+  , ( Node 7, M.fromList
+      [ (Arc 4, S.fromList [Node 3, Node 6]) ]
+    )
+  ]
+
+
+testCRF :: ExpCRF String Double
+testCRF x = case x of
+  "on1" -> 2
+  "on2" -> 0.5
+  "on3" -> 1
+  "on4" -> 2
+  _ -> 1
+
+
+testFeat :: Feat Arc String
+testFeat (Arc x) = case x of
+  1 -> mk1 "on1"
+  2 -> mk1 "on2"
+  3 -> mk1 "on3"
+  4 -> mk1 "on4"
+  _ -> M.empty
+  where mk1 f = M.singleton f 1
+
+
+testPhi :: Phi Arc Double
+testPhi = potential testCRF testFeat
+
+
+-- testPhi :: Phi Arc Double
+-- testPhi (Arc x) = case x of
+--   1 -> 2
+--   2 -> 0.5
+--   3 -> 1
+--   4 -> 2
+--   _ -> 1
