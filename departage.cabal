@@ -22,12 +22,16 @@ library
         base                >= 4        && < 5
       , containers          >= 0.4      && < 0.6
       , data-memocombinators >= 0.5     && < 0.6
+      , data-lens-light     >= 0.1      && < 0.2
 --       , array               >= 0.5      && < 0.6
 --       , binary              >= 0.7      && < 0.9
 --       -- , vector              >= 0.11     && < 0.12
 
     exposed-modules:
-        NLP.Departage.Hype
+        NLP.Departage.DepTree
+      , NLP.Departage.Parser.Item
+      , NLP.Departage.Parser.Arc
+      , NLP.Departage.Hype
       , NLP.Departage.CRF
 
     -- other-modules:
