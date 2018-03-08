@@ -17,6 +17,7 @@ module NLP.Departage.CRF
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import qualified Data.MemoCombinators as Memo
+import qualified Data.Number.LogFloat as LogFloat
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
@@ -60,21 +61,29 @@ type Prob a v = a -> v
 -- | Features assigned to a given element, together with the
 -- corresponding multiplicities.
 --
--- TODO: we would like to allow fractional multiplicities, but then
--- `potential` requires that `v` is Floating and not just
--- Franctional.
--- type Feat a f v = a -> M.Map f v
-type Feat a f = a -> M.Map f Int
-
-
--- -- | A class representing the numbers
--- class Num a where
---   -- | Add two numbers
---   add :: a -> a -> a
+-- TODO: we would like to allow fractional multiplicities, but then `potential`
+-- requires that `v` is Floating and not just Franctional.
 --
---   -- | Sum a list of numbers
---   sum :: [a] -> a
---   sum =
+-- UPDATE 08.03.2018: the problem is that `LogFloat` is not a member of
+-- `Floating`...
+--
+-- type Feat a f v = a -> M.Map f v
+type Feat a f = a -> M.Map f Double
+
+
+-- | A class representing floating point numbers, limited to operations which we
+-- rely on.
+class Fractional a => Flo a where
+  power :: a -> Double -> a
+  fromDouble :: Double -> a
+
+instance Flo Double where
+  power = (**)
+  fromDouble = id
+
+instance Flo LogFloat.LogFloat where
+  power = LogFloat.pow
+  fromDouble = LogFloat.logFloat
 
 
 ------------------------------------------------------------------
@@ -82,12 +91,12 @@ type Feat a f = a -> M.Map f Int
 ------------------------------------------------------------------
 
 
--- | A potential of a given arc.  Should specify a number between 0
--- (very improbable arc) and positive infinitive (particularly
--- plausible arc), while value 1 is neutral.
-potential :: Fractional v => ExpCRF f v -> Feat Arc f -> Arc -> v
+-- | A potential of a given arc. Should specify a number between 0 (very
+-- improbable arc) and positive infinitive (particularly plausible arc), while
+-- value 1 is neutral.
+potential :: Flo v => ExpCRF f v -> Feat Arc f -> Phi Arc v
 potential crf featMap arc = product
-  [ crf feat ^ occNum
+  [ crf feat `power` occNum
   | (feat, occNum) <- M.toList (featMap arc) ]
 
 
@@ -133,7 +142,7 @@ outside hype insideNode insideArc =
     outsideNode = Memo.wrap H.Node H.unNode Memo.integral outsideNode'
     outsideNode' i
       | S.null outgo = 1
-      | otherwise = ( sum 
+      | otherwise = ( sum
           [ outsideArc j * insideArc j
           | j <- S.toList outgo ]
           ) / insideNode i
@@ -151,20 +160,19 @@ normFactor hype ins = sum $ do
 
 
 -- | Compute marginal probabilities of the individual arcs.
-marginals :: Fractional v => ExpCRF f v -> Hype -> Feat Arc f -> Prob Arc v
+marginals :: Flo v => ExpCRF f v -> Hype -> Feat Arc f -> Prob Arc v
 marginals crf hype feat =
   \arc -> insArc arc * outArc arc / zx
   where
-    -- potential :: Floating v => ExpCRF f v -> Feat Arc f v -> Arc -> v
     phi = potential crf feat
-    (insNode, insArc) = inside hype phi
-    (outNode, outArc) = outside hype insNode insArc
+    ( insNode, insArc) = inside hype phi
+    (_outNode, outArc) = outside hype insNode insArc
     zx = normFactor hype insNode
 
 
 -- | Expected number of occurrences of the individual features.
 expected
-  :: (Ord f, Num v)
+  :: (Ord f, Flo v)
   => Hype
   -> Prob Arc v   -- ^ Marginal arc probabilities
   -> Feat Arc f   -- ^ Set of features assigned to a given arc
@@ -174,7 +182,7 @@ expected hype probOn featMap = M.unionsWith (+) $ do
   j <- S.toList (H.ingoing i hype)
   let prob = probOn j
   return $ M.fromListWith (+)
-    [ (feat, prob * fromIntegral occNum)
+    [ (feat, prob * fromDouble occNum)
     | (feat, occNum) <- M.toList (featMap j) ]
 
 

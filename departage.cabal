@@ -23,6 +23,7 @@ library
       , containers          >= 0.4      && < 0.6
       , data-memocombinators >= 0.5     && < 0.6
       , data-lens-light     >= 0.1      && < 0.2
+      , logfloat            >= 0.13     && < 0.14
 --       , array               >= 0.5      && < 0.6
 --       , binary              >= 0.7      && < 0.9
 --       -- , vector              >= 0.11     && < 0.12
