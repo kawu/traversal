@@ -176,7 +176,7 @@ outgoing i =
 --
 -- WARNING: in practice, we might need to make sure that these nodes
 -- actually represent valid solutions, and not just parsing
--- dead-ends. 
+-- dead-ends.
 final :: Hype -> S.Set Node
 final hype =
   nodes hype `S.difference` nonFinal
@@ -194,7 +194,7 @@ final hype =
 
 -- | Create a hypergraph from a list of nodes together with the
 -- incoming arcs.
-fromList :: [(Node, M.Map Arc (S.Set Node))] -> Hype 
+fromList :: [(Node, M.Map Arc (S.Set Node))] -> Hype
 fromList xs = Hype
   newNodeMap
   newArcMap
