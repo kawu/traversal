@@ -1,3 +1,8 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
+
+
 module NLP.Departage.CRF
 (
   inside
@@ -8,9 +13,9 @@ module NLP.Departage.CRF
 
 -- * Tests
 , testHype
-, testCRF
+, testValue
 , testFeat
-, testPhi
+, testCRF
 ) where
 
 
@@ -24,26 +29,38 @@ import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
 
 
 ------------------------------------------------------------------
--- Types
+-- Classes
 ------------------------------------------------------------------
 
 
--- | A feature-based hypergraph, where each arc label is enriched with the set
--- of the corresponding features and their multiplicities.
---
--- NOTE: the multiplicities should be actually (positive) natural numbers, but
--- we do not enforce this (maybe it will be fun to use real numbers later on).
--- type FeatHype i j f = Hype i j (M.Map f Double)
--- type FeatHype i j f = Hype i j [f]
+-- | A class representing floating point numbers, limited to operations which we
+-- rely on.
+class Fractional a => Flo a where
+  power :: a -> a -> a
+
+instance Flo Double where
+  power = (**)
+
+instance Flo LogFloat.LogFloat where
+  power x = LogFloat.pow x . LogFloat.fromLogFloat
 
 
--- | CRF model: *exponential* values assigned to individual features.
-type ExpCRF f v = f -> v
+-- | A class-based representation of maps, so we can plug different
+-- implementations (regular maps, hash-based maps, arrays, etc.).
+class Map m k v where
+  toList :: m k v -> [(k, v)]
+  fromListWith :: (v -> v -> v) -> [(k, v)] -> m k v
+  unionsWith :: (v -> v -> v) -> [m k v] -> m k v
+
+instance Ord k => Map M.Map k v where
+  toList = M.toList
+  fromListWith = M.fromListWith
+  unionsWith = M.unionsWith
 
 
--- | A "potential" assigned by a model to a given element:
--- arc, feature, hyperpath, etc.
-type Phi a v = a -> v
+------------------------------------------------------------------
+-- Types
+------------------------------------------------------------------
 
 
 -- | Inside probabilities.
@@ -58,32 +75,34 @@ type Out a v = a -> v
 type Prob a v = a -> v
 
 
--- | Features assigned to a given element, together with the
--- corresponding multiplicities.
---
--- TODO: we would like to allow fractional multiplicities, but then `potential`
--- requires that `v` is Floating and not just Franctional.
---
--- UPDATE 08.03.2018: the problem is that `LogFloat` is not a member of
--- `Floating`...
---
--- type Feat a f v = a -> M.Map f v
-type Feat a f = a -> M.Map f Double
+-- | CRF model: *exponential* values assigned to individual features.
+type ExpCRF f v = f -> v
 
 
--- | A class representing floating point numbers, limited to operations which we
--- rely on.
-class Fractional a => Flo a where
-  power :: a -> Double -> a
-  fromDouble :: Double -> a
+-- | A "potential" assigned by a model to a given element: arc, feature,
+-- hyperpath, etc.
+type Phi a v = a -> v
 
-instance Flo Double where
-  power = (**)
-  fromDouble = id
 
-instance Flo LogFloat.LogFloat where
-  power = LogFloat.pow
-  fromDouble = LogFloat.logFloat
+-- | Features assigned to a given element, together with the corresponding
+-- multiplicities.
+type Feat a m f v = a -> m f v
+
+
+-- | A composite CRF model, in which the way potentials are computed is
+-- abstracted away. Parametrized by the implementation of the map (`m`), objects
+-- used as features (`v`), and potential values (`v`).
+data CRF m f v = CRF
+  { value :: ExpCRF f v
+    -- ^ The basic component of the model: values assigned to features
+  , feature :: Feat Arc m f v
+    -- ^ Features assigned to the individual arcs, together with their
+    -- multiplicities
+  , potential :: Phi Arc v
+    -- ^ For each arc, `potenial` should give a number between 0 (very
+    -- improbable arc) and positive infinitive (particularly plausible arc),
+    -- while value 1 is neutral.
+  }
 
 
 ------------------------------------------------------------------
@@ -91,13 +110,17 @@ instance Flo LogFloat.LogFloat where
 ------------------------------------------------------------------
 
 
--- | A potential of a given arc. Should specify a number between 0 (very
--- improbable arc) and positive infinitive (particularly plausible arc), while
--- value 1 is neutral.
-potential :: Flo v => ExpCRF f v -> Feat Arc f -> Phi Arc v
-potential crf featMap arc = product
+-- | Computes the `potential`, given the `value` and `feature` components of a
+-- CRF model. The function is correct only if parameters of the model do not
+-- interact (for instance, they do not multiply together).
+defaultPotential
+  :: (Flo v, Map m f v)
+  => ExpCRF f v
+  -> Feat Arc m f v
+  -> Phi Arc v
+defaultPotential crf featMap arc = product
   [ crf feat `power` occNum
-  | (feat, occNum) <- M.toList (featMap arc) ]
+  | (feat, occNum) <- toList (featMap arc) ]
 
 
 -- | Compute the inside probabilities.
@@ -160,11 +183,15 @@ normFactor hype ins = sum $ do
 
 
 -- | Compute marginal probabilities of the individual arcs.
-marginals :: Flo v => ExpCRF f v -> Hype -> Feat Arc f -> Prob Arc v
-marginals crf hype feat =
+marginals
+  :: (Flo v, Map m f Double)
+  => CRF m f v
+  -> Hype
+  -> Prob Arc v
+marginals crf hype =
   \arc -> insArc arc * outArc arc / zx
   where
-    phi = potential crf feat
+    phi = potential crf
     ( insNode, insArc) = inside hype phi
     (_outNode, outArc) = outside hype insNode insArc
     zx = normFactor hype insNode
@@ -172,18 +199,18 @@ marginals crf hype feat =
 
 -- | Expected number of occurrences of the individual features.
 expected
-  :: (Ord f, Flo v)
+  :: (Ord f, Flo v, Map m f v)
   => Hype
-  -> Prob Arc v   -- ^ Marginal arc probabilities
-  -> Feat Arc f   -- ^ Set of features assigned to a given arc
-  -> M.Map f v    -- ^ Expected number of occurrences of the individual features
-expected hype probOn featMap = M.unionsWith (+) $ do
+  -> Prob Arc v     -- ^ Marginal arc probabilities
+  -> Feat Arc m f v -- ^ Set of features assigned to a given arc
+  -> m f v          -- ^ Expected number of occurrences of the individual features
+expected hype probOn featMap = unionsWith (+) $ do
   i <- S.toList (H.nodes hype)
   j <- S.toList (H.ingoing i hype)
   let prob = probOn j
-  return $ M.fromListWith (+)
-    [ (feat, prob * fromDouble occNum)
-    | (feat, occNum) <- M.toList (featMap j) ]
+  return $ fromListWith (+)
+    [ (feat, prob * occNum)
+    | (feat, occNum) <- toList (featMap j) ]
 
 
 ------------------------------------------------------------------
@@ -211,8 +238,8 @@ testHype = H.fromList
   ]
 
 
-testCRF :: ExpCRF String Double
-testCRF x = case x of
+testValue :: ExpCRF String Double
+testValue x = case x of
   "on1" -> 2
   "on2" -> 0.5
   "on3" -> 1
@@ -220,7 +247,7 @@ testCRF x = case x of
   _ -> 1
 
 
-testFeat :: Feat Arc String
+testFeat :: Feat Arc M.Map String Double
 testFeat (Arc x) = case x of
   1 -> mk1 "on1"
   2 -> mk1 "on2"
@@ -230,14 +257,9 @@ testFeat (Arc x) = case x of
   where mk1 f = M.singleton f 1
 
 
-testPhi :: Phi Arc Double
-testPhi = potential testCRF testFeat
-
-
--- testPhi :: Phi Arc Double
--- testPhi (Arc x) = case x of
---   1 -> 2
---   2 -> 0.5
---   3 -> 1
---   4 -> 2
---   _ -> 1
+testCRF :: CRF M.Map String Double
+testCRF = CRF
+  { value = testValue
+  , feature = testFeat
+  , potential = defaultPotential testValue testFeat
+  }
