@@ -6,33 +6,42 @@
 
 module NLP.Departage.CRF
 (
---   CRF (..)
--- , inside
--- , outside
--- , normFactor
--- , marginals
--- , expected
---
--- -- * Tests
--- , testHype
--- , testValue
--- , testFeat
--- , testCRF
+-- * Maps
+  Map(..)
+, RefMap(..)
+, newRefMap
+
+-- * CRF
+, inside
+, outside
+, normFactor
+, marginals
+, ExpMaps(..)
+, expected
+
+-- * Defaults
+, defaultPotential
+, defaultFeat
+
+-- * Tests
+, testHype
+, testValue
+, testFeatBase
+, testAll
 ) where
 
 
 import           Control.Monad (forM_, forM)
-import qualified Control.Monad.ST as ST
-import           Control.Monad.ST (ST)
+-- import qualified Control.Monad.ST as ST
+-- import           Control.Monad.ST (ST)
 import           Control.Monad.Trans.Class (lift)
-import qualified Control.Monad.Primitive as Prim
-import           Control.Monad.Primitive (PrimMonad)
+-- import qualified Control.Monad.Primitive as Prim
 import           Control.Monad.Primitive (PrimMonad)
 
-import qualified Data.PrimRef as Prim
+import qualified Data.PrimRef as Ref
 
 import qualified Pipes as Pipes
-import           Streaming.Prelude (Stream, Of)
+-- import           Streaming.Prelude (Stream, Of)
 
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
@@ -80,6 +89,8 @@ instance Flo LogFloat.LogFloat where
 
 -- | A class-based representation of maps, so we can plug different
 -- implementations (regular maps, hash-based maps, arrays, etc.).
+--
+-- TODO: describe the minimal implementation.
 class Map prim map k v where
 
   -- | Apply the function to all elements in the map
@@ -93,12 +104,40 @@ class Map prim map k v where
   toList :: map k v -> Pipes.ListT prim (k, v)
   -- keys :: map k v -> Stream (Of k) prim ()
 
-  -- | Remove all elements from the map.
-  clear :: map k v -> prim ()
+  -- | Set all elements in the map to `0`
+  clear :: Num v => map k v -> prim ()
+  clear = modify $ const 0
 
   -- toList :: map k v -> prim [(k, v)]
   -- fromListWith :: (v -> v -> v) -> [(k, v)] -> prim (map k v)
   -- unionsWith :: (v -> v -> v) -> [map k v] -> prim (map k v)
+
+
+-- | Referentece to a `M.Map`. We rely on a convention that the value assigned
+-- to the elements not in the map is 0.
+newtype RefMap prim k v =
+  RefMap {unRefMap :: Ref.PrimRef prim (M.Map k v)}
+
+
+-- | Create a `RefMap` with a given map.
+newRefMap :: PrimMonad m => M.Map k v -> m (RefMap m k v)
+newRefMap m = do
+  ref <- Ref.newPrimRef m
+  return $ RefMap ref
+
+
+instance (PrimMonad prim, Ord k) => Map prim (RefMap prim) k v where
+  modify f RefMap{..} = do
+    m <- Ref.readPrimRef unRefMap
+    Ref.writePrimRef unRefMap (fmap f m)
+  unionWith f ref1 ref2 = do
+    m1 <- Ref.readPrimRef $ unRefMap ref1
+    m2 <- Ref.readPrimRef $ unRefMap ref2
+    Ref.writePrimRef (unRefMap ref1) (M.unionWith f m1 m2)
+  toList RefMap{..} = do
+    m <- lift $ Ref.readPrimRef unRefMap
+    Pipes.Select . Pipes.each $ M.toList m
+  clear RefMap{..} = Ref.writePrimRef unRefMap M.empty
 
 
 ------------------------------------------------------------------
@@ -235,7 +274,7 @@ marginals phi hype =
 
 
 -- | Maps given on input to the `expected` function.
-data ExpMap map f v = ExpMap
+data ExpMaps map f v = ExpMaps
   { expMap :: map f v
     -- ^ Expected number of occurrences of the individual features
   , buffer :: map f v
@@ -301,9 +340,9 @@ expected
                     -- ^ The feature function
   -> Hype           -- ^ The underlying hypergraph
   -> Prob Arc v     -- ^ Marginal arc probabilities in the hypergraph
-  -> ExpMap map f v
+  -> ExpMaps map f v
   -> prim ()
-expected feature hype probOn ExpMap{..} =
+expected feature hype probOn ExpMaps{..} =
   forM_ (S.toList $ H.arcs hype) $ \i -> do
     -- put features and their multiplicities in the buffer
     feature i buffer
@@ -349,13 +388,13 @@ defaultPotential
   -> prim (Phi Arc v)
 defaultPotential crf hype feature =
   fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
-    acc <- Prim.newPrimRef 1
+    acc <- Ref.newPrimRef 1
     featMap <- feature arc
     Pipes.runListT $ do
       (feat, occNum) <- toList featMap
       let x = crf feat `power` occNum
-      lift $ Prim.modifyPrimRef' acc (*x)
-    res <- Prim.readPrimRef acc
+      lift $ Ref.modifyPrimRef' acc (*x)
+    res <- Ref.readPrimRef acc
     return (arc, res)
   where
     mkPhi xs =
@@ -378,7 +417,7 @@ defaultPotential crf hype feature =
 -- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
 -- Of course it might not be optimal in certain situations.
 defaultFeat
-  :: (PrimMonad prim, Map prim map f v)
+  :: (Num v, PrimMonad prim, Map prim map f v)
   => FeatBase a prim map f v
   -> Feat a prim map f v
 defaultFeat featBase arc featMap = do
@@ -422,19 +461,24 @@ testValue x = case x of
   _ -> 1
 
 
--- testFeat :: Feat Arc M.Map String Double
--- testFeat (Arc x) = case x of
---   1 -> mk1 "on1"
---   2 -> mk1 "on2"
---   3 -> mk1 "on3"
---   4 -> mk1 "on4"
---   _ -> M.empty
---   where mk1 f = M.singleton f 1
---
---
--- testCRF :: CRF M.Map String Double
--- testCRF = CRF
---   { value = testValue
---   , feature = testFeat
---   , potential = defaultPotential testValue testFeat
---   }
+testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
+testFeatBase (Arc x) = case x of
+  1 -> mk1 "on1"
+  2 -> mk1 "on2"
+  3 -> mk1 "on3"
+  4 -> mk1 "on4"
+  _ -> newRefMap M.empty
+  where
+    mk1 f = newRefMap $ M.singleton f 1
+
+
+testAll :: IO ()
+testAll = do
+  phi <- defaultPotential testValue testHype testFeatBase
+  let marg = marginals phi testHype
+  ex <- newRefMap M.empty
+  buf <- newRefMap M.empty
+  expected (defaultFeat testFeatBase) testHype marg $ ExpMaps
+    { expMap = ex
+    , buffer = buf }
+  print =<< Ref.readPrimRef (unRefMap ex)
