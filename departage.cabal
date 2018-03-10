@@ -21,12 +21,17 @@ library
     build-depends:
         base                >= 4        && < 5
       , containers          >= 0.4      && < 0.6
+      , transformers        >= 0.5      && < 0.6
       , data-memocombinators >= 0.5     && < 0.6
       , data-lens-light     >= 0.1      && < 0.2
       , logfloat            >= 0.13     && < 0.14
+      , primitive           >= 0.6      && < 0.7
+      , vector              >= 0.11     && < 0.13
+      , pipes               >= 4.3      && < 4.4
+      , monad-primitive     >= 0.1      && < 0.2
+      , streaming           >= 0.2      && < 0.3
 --       , array               >= 0.5      && < 0.6
 --       , binary              >= 0.7      && < 0.9
---       -- , vector              >= 0.11     && < 0.12
 
     exposed-modules:
         NLP.Departage.DepTree

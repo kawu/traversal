@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
 
 
 module NLP.Departage.CRF
@@ -20,8 +21,18 @@ module NLP.Departage.CRF
 ) where
 
 
+import           Control.Monad (forM_, forM)
 import qualified Control.Monad.ST as ST
 import           Control.Monad.ST (ST)
+import           Control.Monad.Trans.Class (lift)
+import qualified Control.Monad.Primitive as Prim
+import           Control.Monad.Primitive (PrimMonad)
+import           Control.Monad.Primitive (PrimMonad)
+
+import qualified Data.PrimRef as Prim
+
+import qualified Pipes as Pipes
+import           Streaming.Prelude (Stream, Of)
 
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
@@ -69,10 +80,25 @@ instance Flo LogFloat.LogFloat where
 
 -- | A class-based representation of maps, so we can plug different
 -- implementations (regular maps, hash-based maps, arrays, etc.).
-class Map m k v where
-  toList :: m k v -> [(k, v)]
-  fromListWith :: (v -> v -> v) -> [(k, v)] -> m k v
-  unionsWith :: (v -> v -> v) -> [m k v] -> m k v
+class Map prim map k v where
+
+  -- | Apply the function to all elements in the map
+  modify :: (v -> v) -> map k v -> prim ()
+
+  -- | Union of two maps with the given merging function. The result should be
+  -- stored in the first map.
+  unionWith :: (v -> v -> v) -> map k v -> map k v -> prim ()
+
+  -- | The stream of keys in the map
+  toList :: map k v -> Pipes.ListT prim (k, v)
+  -- keys :: map k v -> Stream (Of k) prim ()
+
+  -- | Remove all elements from the map.
+  clear :: map k v -> prim ()
+
+  -- toList :: map k v -> prim [(k, v)]
+  -- fromListWith :: (v -> v -> v) -> [(k, v)] -> prim (map k v)
+  -- unionsWith :: (v -> v -> v) -> [map k v] -> prim (map k v)
 
 
 ------------------------------------------------------------------
@@ -101,13 +127,15 @@ type ExpCRF f v = f -> v
 type Phi a v = a -> v
 
 
--- | Computes the features assigned to a given element, together with the
--- corresponding multiplicities. A feature function can assume that the input
--- map (`m f v`) is empty.
---
--- TODO: We could use `ST s` instead of `IO`, but then the `CRF` type gest ugly.
--- Maybe the `CRF` type should be split itself?
-type Feat a m f v = a -> m f v -> IO (m f v)
+-- | Computes the map (`map f v`) of features (`f`) assigned to a given elements
+-- `a` (e.g. `Arc`), together with the corresponding multiplicities (`v`), and
+-- put them in the input map (note that computation is performed in the `prim`
+-- monad). The function should not assume that the given map is empty.
+type Feat a prim map f v = a -> map f v -> prim ()
+
+
+-- | A version of `Feat` which creates the map and returns it.
+type FeatBase a prim map f v = a -> prim (map f v)
 
 
 ------------------------------------------------------------------
@@ -115,46 +143,25 @@ type Feat a m f v = a -> m f v -> IO (m f v)
 ------------------------------------------------------------------
 
 
--- | A composite CRF model, in which the way potentials are computed is
--- abstracted away. Parametrized by the implementation of the map (`m`), objects
--- used as features (`f`), and potential values (`v`).
---
--- TODO: It seems that a CRF does not have much sense without its underlying
--- hypergraph. So maybe it should be included in the data structure?
-data CRF m f v = CRF
-  { value :: ExpCRF f v
-    -- ^ The basic component of the model: values assigned to features
-  , feature :: Feat Arc m f v
-    -- ^ Features assigned to the individual arcs, together with their
-    -- multiplicities
-  , potential :: Phi Arc v
-    -- ^ For each arc, `potenial` should give a number between 0 (very
-    -- improbable arc) and positive infinitive (particularly plausible arc),
-    -- while value 1 is neutral.
-  }
+-- -- | A composite CRF model, in which the way potentials are computed is
+-- -- abstracted away. Parametrized by the implementation of the map (`m`), objects
+-- -- used as features (`f`), and potential values (`v`).
+-- data CRF m f v = CRF
+--   { value :: ExpCRF f v
+--     -- ^ The basic component of the model: values assigned to features
+--   , feature :: Feat Arc m f v
+--     -- ^ Features assigned to the individual arcs, together with their
+--     -- multiplicities
+--   , potential :: Phi Arc v
+--     -- ^ For each arc, `potenial` should give a number between 0 (very
+--     -- improbable arc) and positive infinitive (particularly plausible arc),
+--     -- while value 1 is neutral.
+--   }
 
 
 ------------------------------------------------------------------
 -- Basic functions
 ------------------------------------------------------------------
-
-
--- -- | Computes the `potential`, given the `value` and `feature` components of a
--- -- CRF model. The function is correct only if parameters of the model do not
--- -- interact (for instance, they do not multiply together).
--- --
--- -- NOTE: the function will not be so straightforward once the feature computing
--- -- function is embedded in a monad. Then we will probably need, as input
--- -- argument, the entire hypergraph, so that `defaultPotential` can return
--- -- something like `m (Phi Arc v)`.
--- defaultPotential
---   :: (Flo v, Map m f v)
---   => ExpCRF f v
---   -> Feat Arc m f v
---   -> Phi Arc v
--- defaultPotential crf feat arc = product
---   [ crf feat `power` occNum
---   | (feat, occNum) <- toList (feat arc) ]
 
 
 -- | Compute the inside probabilities.
@@ -175,7 +182,7 @@ inside hype phi =
       | otherwise = sum
           [ insideArc j
           | j <- S.toList ingo ]
-      where ingo = H.ingoing i hype
+      where ingo = H.incoming i hype
 
     insideArc = Memo.wrap H.Arc  H.unArc  Memo.integral insideArc'
     insideArc' j = phi j * product
@@ -216,15 +223,24 @@ normFactor hype ins = sum $ do
   return $ ins i
 
 
--- | Compute marginal probabilities of the individual arcs.
-marginals :: Flo v => CRF m f v -> Hype -> Prob Arc v
-marginals crf hype =
+-- | Compute marginal probabilities of the individual arcs given the potential
+-- function.
+marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
+marginals phi hype =
   \arc -> insArc arc * outArc arc / zx
   where
-    phi = potential crf
     ( insNode, insArc) = inside hype phi
     (_outNode, outArc) = outside hype insNode insArc
     zx = normFactor hype insNode
+
+
+-- | Maps given on input to the `expected` function.
+data ExpMap map f v = ExpMap
+  { expMap :: map f v
+    -- ^ Expected number of occurrences of the individual features
+  , buffer :: map f v
+    -- ^ A buffer which can be used by `expected` for internal use
+  }
 
 
 -- | Expected number of occurrences of the individual features.
@@ -279,7 +295,24 @@ marginals crf hype =
 --    `marginals` are fine as they are, no need to update them to account for
 --    mutable maps. Only the `expected` function (and `defaultPotential`) must
 --    be updated.
---
+expected
+  :: (Ord f, Flo v, PrimMonad prim, Map prim map f v)
+  => Feat Arc prim map f v
+                    -- ^ The feature function
+  -> Hype           -- ^ The underlying hypergraph
+  -> Prob Arc v     -- ^ Marginal arc probabilities in the hypergraph
+  -> ExpMap map f v
+  -> prim ()
+expected feature hype probOn ExpMap{..} =
+  forM_ (S.toList $ H.arcs hype) $ \i -> do
+    -- put features and their multiplicities in the buffer
+    feature i buffer
+    -- multiply the multiplicities by the probability of the arc
+    let prob = probOn i
+    modify (*prob) buffer
+    -- add the buffer to the result map
+    unionWith (+) expMap buffer
+
 -- expected
 --   :: (Ord f, Flo v, Map m f v)
 --   => CRF m f v      -- ^ The CRF model
@@ -288,25 +321,71 @@ marginals crf hype =
 --   -> m f v          -- ^ Expected number of occurrences of the individual features
 -- expected crf hype probOn = unionsWith (+) $ do
 --   i <- S.toList (H.nodes hype)
---   j <- S.toList (H.ingoing i hype)
+--   j <- S.toList (H.incoming i hype)
 --   let prob = probOn j
 --   return $ fromListWith (+)
 --     [ (feat, prob * occNum)
 --     | (feat, occNum) <- toList (feature crf j) ]
+
+
+------------------------------------------------------------------
+-- Defaults
+------------------------------------------------------------------
+
+
+-- | Computes the `potential`, given the `value` and `feature` components of a
+-- CRF model. The function is correct only if parameters of the model do not
+-- interact (for instance, they do not multiply together).
 --
--- expected
---   :: (Ord f, Flo v, Map m f v)
---   => CRF m f v      -- ^ The CRF model
---   -> Hype           -- ^ The underlying hypergraph
---   -> Prob Arc v     -- ^ Marginal arc probabilities in the hypergraph
---   -> m f v          -- ^ Expected number of occurrences of the individual features
--- expected crf hype probOn = unionsWith (+) $ do
---   i <- S.toList (H.nodes hype)
---   j <- S.toList (H.ingoing i hype)
---   let prob = probOn j
---   return $ fromListWith (+)
---     [ (feat, prob * occNum)
---     | (feat, occNum) <- toList (feature crf j) ]
+-- NOTE: the function will not be so straightforward once the feature computing
+-- function is embedded in a monad. Then we will probably need, as input
+-- argument, the entire hypergraph, so that `defaultPotential` can return
+-- something like `m (Phi Arc v)`.
+defaultPotential
+  :: (Flo v, PrimMonad prim, Map prim map f v)
+  => ExpCRF f v
+  -> Hype
+  -> FeatBase Arc prim map f v
+  -> prim (Phi Arc v)
+defaultPotential crf hype feature =
+  fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
+    acc <- Prim.newPrimRef 1
+    featMap <- feature arc
+    Pipes.runListT $ do
+      (feat, occNum) <- toList featMap
+      let x = crf feat `power` occNum
+      lift $ Prim.modifyPrimRef' acc (*x)
+    res <- Prim.readPrimRef acc
+    return (arc, res)
+  where
+    mkPhi xs =
+      let m = M.fromList xs
+      in  \arc -> case M.lookup arc m of
+                    Just v  -> v
+                    Nothing -> error "defaulPotential: incorrect arc"
+
+
+-- defaultPotential
+--   :: (Flo v, Map m f v)
+--   => ExpCRF f v
+--   -> Feat Arc m f v
+--   -> Phi Arc v
+-- defaultPotential crf feat arc = product
+--   [ crf feat `power` occNum
+--   | (feat, occNum) <- toList (feat arc) ]
+
+
+-- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
+-- Of course it might not be optimal in certain situations.
+defaultFeat
+  :: (PrimMonad prim, Map prim map f v)
+  => FeatBase a prim map f v
+  -> Feat a prim map f v
+defaultFeat featBase arc featMap = do
+  clear featMap
+  featMap' <- featBase arc
+  unionWith (\_ x -> x) featMap featMap'
+
 
 
 ------------------------------------------------------------------
@@ -314,35 +393,35 @@ marginals crf hype =
 ------------------------------------------------------------------
 
 
--- testHype :: Hype
--- testHype = H.fromList
---   [ ( Node 1, M.empty )
---   , ( Node 2, M.empty )
---   , ( Node 3, M.fromList
---       [ (Arc 1, S.fromList [Node 1]) ]
---     )
---   , ( Node 4, M.fromList
---       [ (Arc 2, S.fromList [Node 2, Node 3]) ]
---     )
---   , ( Node 5, M.empty )
---   , ( Node 6, M.fromList
---       [ (Arc 3, S.fromList [Node 2, Node 5]) ]
---     )
---   , ( Node 7, M.fromList
---       [ (Arc 4, S.fromList [Node 3, Node 6]) ]
---     )
---   ]
---
---
--- testValue :: ExpCRF String Double
--- testValue x = case x of
---   "on1" -> 2
---   "on2" -> 0.5
---   "on3" -> 1
---   "on4" -> 2
---   _ -> 1
---
---
+testHype :: Hype
+testHype = H.fromList
+  [ ( Node 1, M.empty )
+  , ( Node 2, M.empty )
+  , ( Node 3, M.fromList
+      [ (Arc 1, S.fromList [Node 1]) ]
+    )
+  , ( Node 4, M.fromList
+      [ (Arc 2, S.fromList [Node 2, Node 3]) ]
+    )
+  , ( Node 5, M.empty )
+  , ( Node 6, M.fromList
+      [ (Arc 3, S.fromList [Node 2, Node 5]) ]
+    )
+  , ( Node 7, M.fromList
+      [ (Arc 4, S.fromList [Node 3, Node 6]) ]
+    )
+  ]
+
+
+testValue :: ExpCRF String Double
+testValue x = case x of
+  "on1" -> 2
+  "on2" -> 0.5
+  "on3" -> 1
+  "on4" -> 2
+  _ -> 1
+
+
 -- testFeat :: Feat Arc M.Map String Double
 -- testFeat (Arc x) = case x of
 --   1 -> mk1 "on1"

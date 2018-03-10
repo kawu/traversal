@@ -12,10 +12,10 @@ module NLP.Departage.Hype
 
 -- * Primitive operations
 , nodes
--- , arcs
+, arcs
 , head
 , tail
-, ingoing
+, incoming
 , outgoing
 
 -- * Intermediate operations
@@ -37,7 +37,7 @@ module NLP.Departage.Hype
 -- -- * Primitive Operations
 -- , begsWith
 -- , endsWith
--- , ingoingEdges
+-- , incomingEdges
 -- , outgoingEdges
 -- , maybeNodeLabel
 -- , nodeLabel
@@ -119,7 +119,7 @@ newtype Arc = Arc {unArc :: Int}
 -- | Node internal structure.
 data NodeStr = NodeStr
   { insSet :: S.Set Arc
-    -- ^ Set of ingoing arcs
+    -- ^ Set of incoming arcs
   , outSet :: S.Set Arc
     -- ^ Set of outgoing arcs
   } deriving (Show, Eq, Ord)
@@ -137,6 +137,13 @@ nodes :: Hype -> S.Set Node
 nodes = M.keysSet . nodeMap
 
 
+-- | Retrieve the set of all arcs.
+arcs :: Hype -> S.Set Arc
+arcs hype = S.unions
+  [ incoming i hype
+  | i <- S.toList $ nodes hype ]
+
+
 -- | A head of a given edge.
 head :: Arc -> Hype -> Node
 head j =
@@ -151,11 +158,11 @@ tail j =
   where errMsg = "Hype.tail: unknown arc"
 
 
--- | The set of arcs ingoing to a given node.
-ingoing :: Node -> Hype -> S.Set Arc
-ingoing i =
+-- | The set of arcs incoming to a given node.
+incoming :: Node -> Hype -> S.Set Arc
+incoming i =
   maybe (error errMsg) insSet . M.lookup i . nodeMap
-  where errMsg = "Hype.ingoing: unknown node"
+  where errMsg = "Hype.incoming: unknown node"
 
 
 -- | The set of arcs outgoing from a given node.
@@ -183,7 +190,7 @@ final hype =
   where
     nonFinal = S.unions $ do
       i <- S.toList (nodes hype)
-      j <- S.toList (ingoing i hype)
+      j <- S.toList (incoming i hype)
       return $ tail j hype
 
 
@@ -307,9 +314,9 @@ fromList xs = Hype
 --
 --
 -- -- | The list of outgoint edges from the given node, in ascending order.
--- ingoingEdges :: NodeID -> DAG a b -> [EdgeID]
--- ingoingEdges i DAG{..} = case M.lookup i nodeMap of
---   Nothing -> error "ingoingEdges: incorrect ID"
+-- incomingEdges :: NodeID -> DAG a b -> [EdgeID]
+-- incomingEdges i DAG{..} = case M.lookup i nodeMap of
+--   Nothing -> error "incomingEdges: incorrect ID"
 --   Just Node{..} -> S.toAscList ingoSet
 --
 --
