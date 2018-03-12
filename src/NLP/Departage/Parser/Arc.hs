@@ -17,10 +17,9 @@ import           Data.Lens.Light
 import qualified NLP.Departage.Parser.Item as I
 
 
--- | An arc represents an action of inducing a new item on the
--- basis of one or two other chart items.  It can be seen as an
--- application of one of the inference rules specifying the parsing
--- algorithm.
+-- | An arc represents an action of inducing a new item on the basis of one or
+-- two other chart items. It can be seen as an application of one of the
+-- inference rules specifying the parsing algorithm.
 data Arc a b = Arc
   { left :: I.Item a
     -- ^ Left of the daughter items
@@ -42,8 +41,8 @@ data Arc a b = Arc
 type Prio = Int
 
 
--- | Priority of an item depending on its span. Makes sure that
--- states are removed from the queue in a specific order.
+-- | Priority of an item depending on its span. Makes sure that states are
+-- removed from the queue in a specific order.
 prioOn :: I.Span -> Prio
 prioOn = getL I.end
 -- prioOn :: Span -> Prio

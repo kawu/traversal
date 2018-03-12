@@ -6,7 +6,7 @@
 
 module NLP.Departage.Parser.Item
 (
--- * Types 
+-- * Types
   Span (..)
 , beg
 , end
@@ -43,7 +43,7 @@ $( makeLenses [''Span] )
 
 -- | A chart item parametrized by the type of lexical objects stored
 -- inside.
-data Item a = Item 
+data Item a = Item
   { _span  :: {-# UNPACK #-} !Span
   , _value :: a
   } deriving (Show, Eq, Ord)
