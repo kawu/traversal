@@ -37,6 +37,10 @@ import           Control.Monad (forM_, forM)
 import           Control.Monad.Trans.Class (lift)
 -- import qualified Control.Monad.Primitive as Prim
 import           Control.Monad.Primitive (PrimMonad)
+import qualified Control.Monad.RWS.Strict as RWS
+
+-- import qualified Numeric.SGD.LogSigned as LogSigned
+-- import qualified Numeric.SGD.Momentum as SGD
 
 import qualified Data.PrimRef as Ref
 
@@ -46,7 +50,7 @@ import qualified Pipes as Pipes
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import qualified Data.MemoCombinators as Memo
-import qualified Data.Number.LogFloat as LogFloat
+import qualified Data.Number.LogFloat as F
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
@@ -65,8 +69,45 @@ class Fractional a => Flo a where
 instance Flo Double where
   power = (**)
 
-instance Flo LogFloat.LogFloat where
-  power x = LogFloat.pow x . LogFloat.fromLogFloat
+instance Flo F.LogFloat where
+  power x = F.pow x . F.fromLogFloat
+
+
+------------------------------------------------------------------
+-- Basic types
+------------------------------------------------------------------
+
+
+-- | Inside probabilities.
+type Ins a v = a -> v
+
+
+-- | Outside probabilities.
+type Out a v = a -> v
+
+
+-- | Probability of a given element.
+type Prob a v = a -> v
+
+
+-- | CRF model: *exponential* values assigned to individual features.
+type ExpCRF f v = f -> v
+
+
+-- | A "potential" assigned by a model to a given element: arc, feature,
+-- hyperpath, etc.
+type Phi a v = a -> v
+
+
+-- | Computes the map (`map f v`) of features (`f`) assigned to a given element
+-- `a` (e.g. `Arc`), together with the corresponding multiplicities (`v`), and
+-- put them in the input map (note that computation is performed in the `prim`
+-- monad). The function should not assume that the given map is empty.
+type Feat a prim map f v = a -> map f v -> prim ()
+
+
+-- | A version of `Feat` which creates the map and returns it.
+type FeatBase a prim map f v = a -> prim (map f v)
 
 
 ------------------------------------------------------------------
@@ -141,40 +182,47 @@ instance (PrimMonad prim, Ord k) => Map prim (RefMap prim) k v where
 
 
 ------------------------------------------------------------------
--- Basic types
+-- Manual memory management monad
 ------------------------------------------------------------------
 
 
--- | Inside probabilities.
-type Ins a v = a -> v
+-- | Manual memory management monad transformer. All maps in provided by `Mame`
+-- have the same size and index span.
+type Mame buf m = RWS.RWST (m buf) () [buf] m
 
 
--- | Outside probabilities.
-type Out a v = a -> v
+-- | Pop or create a new buffer. Internal function.
+popBuffer :: Monad m => Mame buf m buf
+popBuffer = do
+  free <- RWS.get
+  case free of
+    buf : rest -> do
+      RWS.put rest
+      return buf
+    _ -> do
+      new <- RWS.ask
+      lift new
 
 
--- | Probability of a given element.
-type Prob a v = a -> v
+-- | Return the buffer on the stack. Internal function.
+pushBuffer :: Monad m => buf -> Mame buf m ()
+pushBuffer buf = RWS.modify' (buf:)
 
 
--- | CRF model: *exponential* values assigned to individual features.
-type ExpCRF f v = f -> v
-
-
--- | A "potential" assigned by a model to a given element: arc, feature,
--- hyperpath, etc.
-type Phi a v = a -> v
-
-
--- | Computes the map (`map f v`) of features (`f`) assigned to a given elements
--- `a` (e.g. `Arc`), together with the corresponding multiplicities (`v`), and
--- put them in the input map (note that computation is performed in the `prim`
--- monad). The function should not assume that the given map is empty.
-type Feat a prim map f v = a -> map f v -> prim ()
-
-
--- | A version of `Feat` which creates the map and returns it.
-type FeatBase a prim map f v = a -> prim (map f v)
+-- | Perform a computation with a buffer.
+--
+-- WARNING: the computation should not return the buffer nor any direct or
+-- indirect references to it. `Mame` may allocate it to other workers once the
+-- computation is over.
+withBuffer
+  :: (PrimMonad prim)
+  => (buf -> Mame buf prim a)
+  -> Mame buf prim a
+withBuffer f = do
+  buf <- popBuffer
+  x <- f buf
+  pushBuffer buf
+  return x
 
 
 ------------------------------------------------------------------
@@ -199,7 +247,7 @@ type FeatBase a prim map f v = a -> prim (map f v)
 
 
 ------------------------------------------------------------------
--- Basic functions
+-- Inference
 ------------------------------------------------------------------
 
 
@@ -284,56 +332,7 @@ data ExpMaps map f v = ExpMaps
 
 -- | Expected number of occurrences of the individual features.
 --
--- 1) The resulting map (param p -> E[p]) can be stored in an unboxed vector,
---    provided on input and gradually updated by the `expected` function. This
---    solution is especially desirable when the number of parameters is high
---    already at the level of the individual arcs (we will call such arcs
---    "dense") -- creating a separate map for each arc would be significantly
---    slower in this case. It should also work sufficiently well for sparse
---    arcs, since then we can reuse a single (or a couple of, if we want to
---    parallelize) array for the entire (sub-)batch.
---
--- 2) For each arc, the `feature` function should provide the respective
---    features together with their corresponding multiplicities. The function
---    could take an empty array of parameter values as input, fill it and
---    return. This would be a good strategy for dense arcs, but not so good for
---    sparse arcs. Using maps (potentially hash-based maps) would be good for
---    sparse arcs but not for dense arcs. Streaming could be a reasonable
---    middle-ground solution, but it could be less precise (a stream could,
---    depending on the model, return one and the same feature several times).
---
--- 3) We could abstract from the implementation of maps, as we were trying to
---    do, and support both regular maps and unboxed vectors.
---
--- 4) Another question is: do we need mutable vectors, or could/shoud we stick
---    to an immutable solution? For simplicity, let's assume that we are working
---    with unboxed vectors and not maps (or both). It seems clear that the
---    top-level vector (cf. 1) should be mutable. Well, it doesn't have to
---    mutable when given to the `expected` function as argument, but it will be
---    most likely more convenient to `unsafeThaw` it once, traverse all the arcs
---    of the hypergraph, update the mutable top-level vector, and `unsafeFreeze`
---    it in the end. Maybe we could do similarly with the `feature` function --
---    it could take an immutable vector, thaw it, play with it, freeze it and
---    return. But then, do we gain anything by doing that? It seems not. It has
---    to be specified in the description of the `feature` function that its
---    input argument cannot be used after the function is evaluated (cf.
---    `unsafeThaw`).
---
--- %) TO CONCLUDE: it seems that the best solution will be to (a) use mutable
---    vectors for both the top-level and the `feature` vectors, and (b) try to
---    abstract from the actual implementation of the map/vector.
---
--- $) COMMENT: Ok, so the `feature` function will be embeded in a monad. How are
---    we going to compute the potentials of the individual arcs (cf.
---    `defaultPotential`)? Well, as noted in a comment to `defaultPotential`
---    itself, we will have to traverse the entire hypergraph to compute its
---    results, store it in something like a `M.Map Arc v`, and return something
---    like `m (Phi Arc v)`.
---
--- $) COMMENT CD.: Great, so now `inside`, `outside`, `normFactor`, and
---    `marginals` are fine as they are, no need to update them to account for
---    mutable maps. Only the `expected` function (and `defaultPotential`) must
---    be updated.
+-- TODO: Move it to `Mema` monad, get rid of `ExpMaps`.
 expected
   :: (Ord f, Flo v, PrimMonad prim, Map prim map f v)
   => Feat Arc prim map f v
@@ -352,6 +351,7 @@ expected feature hype probOn ExpMaps{..} =
     -- add the buffer to the result map
     unionWith (+) expMap buffer
 
+
 -- expected
 --   :: (Ord f, Flo v, Map m f v)
 --   => CRF m f v      -- ^ The CRF model
@@ -365,6 +365,56 @@ expected feature hype probOn ExpMaps{..} =
 --   return $ fromListWith (+)
 --     [ (feat, prob * occNum)
 --     | (feat, occNum) <- toList (feature crf j) ]
+
+
+------------------------------------------------------------------
+-- Training
+------------------------------------------------------------------
+
+
+-- | Training data element.
+data Elem prim map f v = Elem
+  { elemHype :: Hype
+    -- ^ The hypergraph
+  , elemProb :: Prob Arc v
+    -- ^ The prior probabilities of the individual arcs
+  , elemFeat :: Feat Arc prim map f v
+    -- ^ Function which assigns features `f` with their counts `v` to the
+    -- individual arcs in `elemHype`; consider using `defaultFeat`
+  , elemPot  :: Phi Arc v
+    -- ^ Arc potentials; consider using `defaultPotential`
+  }
+
+
+-- | We split the gradient into the positive and negative component, for better
+-- numerical stability. At least if we perform computations in log-domain.
+data Grad map f v = Grad
+  { posGrad :: map f v
+  , negGrad :: map f v
+  }
+
+
+-- -- | Update the gradient with respect to the given dataset element.
+-- updateGradientOn
+--   :: (Map prim map f v)
+--   => Elem prim map f v
+--      -- ^ A dataset element for which to compute the gradient
+--   -> Grad map f v
+--      -- ^ The gradient so far
+--   -> prim (Grad map f v)
+-- updateGradientOn Elem{..} Grad{..} = do
+
+
+
+
+-- gradOn :: Md.Model -> SGD.Para -> DAG a (X, Y) -> SGD.Grad
+-- gradOn model para dag = SGD.fromLogList $
+--     [ (Md.featToJustInt curr feat, L.fromPos val)
+--     | (feat, val) <- featuresIn dag ] ++
+--     [ (ix, L.fromNeg val)
+--     | (Md.FeatIx ix, val) <- I.expectedFeaturesIn curr (fmap fst dag) ]
+--   where
+--     curr = model { Md.values = para }
 
 
 ------------------------------------------------------------------
