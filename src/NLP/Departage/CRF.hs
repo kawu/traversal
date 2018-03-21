@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 
 module NLP.Departage.CRF
@@ -11,12 +12,15 @@ module NLP.Departage.CRF
 , RefMap(..)
 , newRefMap
 
+-- * Buffers
+, Mame
+, runMame
+
 -- * CRF
 , inside
 , outside
 , normFactor
 , marginals
-, ExpMaps(..)
 , expected
 
 -- * Defaults
@@ -49,6 +53,7 @@ import qualified Pipes as Pipes
 
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
+import qualified Data.Map.Merge.Strict as MM
 import qualified Data.MemoCombinators as Memo
 import qualified Data.Number.LogFloat as F
 
@@ -65,12 +70,16 @@ import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
 -- rely on.
 class Fractional a => Flo a where
   power :: a -> a -> a
+  -- | To a double (in normal domain)
+  toDouble :: a -> Double
 
 instance Flo Double where
   power = (**)
+  toDouble = id
 
 instance Flo F.LogFloat where
-  power x = F.pow x . F.fromLogFloat
+  toDouble = F.fromLogFloat
+  power x = F.pow x . toDouble
 
 
 ------------------------------------------------------------------
@@ -115,43 +124,40 @@ type FeatBase a prim map f v = a -> prim (map f v)
 ------------------------------------------------------------------
 
 
--- -- | A class-based representation of maps, so we can plug different
--- -- implementations (regular maps, hash-based maps, arrays, etc.).
--- class Map m k v where
---   toList :: m k v -> [(k, v)]
---   fromListWith :: (v -> v -> v) -> [(k, v)] -> m k v
---   unionsWith :: (v -> v -> v) -> [m k v] -> m k v
---
--- instance Ord k => Map M.Map k v where
---   toList = M.toList
---   fromListWith = M.fromListWith
---   unionsWith = M.unionsWith
-
-
--- | A class-based representation of maps, so we can plug different
--- implementations (regular maps, hash-based maps, arrays, etc.).
---
--- TODO: describe the minimal implementation.
-class Map prim map k v where
+-- | A class-based representation of maps from keys to floating-point numbers,
+-- so we can plug different implementations (regular maps, hash-based maps,
+-- arrays, etc.).
+class (PrimMonad prim, Flo v) => Map prim map k v where
+  {-# MINIMAL modify, unionWith #-}
 
   -- | Apply the function to all elements in the map
   modify :: (v -> v) -> map k v -> prim ()
 
   -- | Union of two maps with the given merging function. The result should be
-  -- stored in the first map.
-  unionWith :: (v -> v -> v) -> map k v -> map k v -> prim ()
+  -- stored in the first map.  Elements in the second map which are not in the
+  -- first map are ignored.
+  unionWith
+    :: Map prim map k w
+    => (v -> w -> v)
+    -> map k v
+    -> map k w
+    -> prim ()
 
-  -- | The stream of keys in the map
-  toList :: map k v -> Pipes.ListT prim (k, v)
-  -- keys :: map k v -> Stream (Of k) prim ()
+--   unionWith
+--     :: (v -> v -> v)
+--     -> map k v
+--     -> map k v
+--     -> prim ()
 
   -- | Set all elements in the map to `0`
   clear :: Num v => map k v -> prim ()
   clear = modify $ const 0
 
-  -- toList :: map k v -> prim [(k, v)]
-  -- fromListWith :: (v -> v -> v) -> [(k, v)] -> prim (map k v)
-  -- unionsWith :: (v -> v -> v) -> [map k v] -> prim (map k v)
+
+-- | An extention of `Map` which allows to enumerate the keys in the map.
+class Map prim map k v => EnumerableMap prim map k v where
+  -- | The stream of keys in the map
+  toList :: map k v -> Pipes.ListT prim (k, v)
 
 
 -- | Referentece to a `M.Map`. We rely on a convention that the value assigned
@@ -167,18 +173,39 @@ newRefMap m = do
   return $ RefMap ref
 
 
-instance (PrimMonad prim, Ord k) => Map prim (RefMap prim) k v where
+-- We require that `Num v` for the sake of `unionWith`: if an element is not
+-- present in the map, than its value is `0`.
+instance (PrimMonad prim, Ord k, Flo v) =>
+  Map prim (RefMap prim) k v where
+
   modify f RefMap{..} = do
     m <- Ref.readPrimRef unRefMap
     Ref.writePrimRef unRefMap (fmap f m)
+
   unionWith f ref1 ref2 = do
     m1 <- Ref.readPrimRef $ unRefMap ref1
     m2 <- Ref.readPrimRef $ unRefMap ref2
-    Ref.writePrimRef (unRefMap ref1) (M.unionWith f m1 m2)
+    let merged = MM.merge
+          MM.preserveMissing -- Preserve element if not in the second map
+          (MM.mapMissing $ const (f 0))
+          (MM.zipWithMatched $ const f)
+          m1 m2
+    Ref.writePrimRef (unRefMap ref1) merged
+
+--   unionWith f ref1 ref2 = do
+--     m1 <- Ref.readPrimRef $ unRefMap ref1
+--     m2 <- Ref.readPrimRef $ unRefMap ref2
+--     Ref.writePrimRef (unRefMap ref1) (M.unionWith f m1 m2)
+
+  clear RefMap{..} = Ref.writePrimRef unRefMap M.empty
+
+
+instance (Map prim (RefMap prim) k v) =>
+  EnumerableMap prim (RefMap prim) k v where
+
   toList RefMap{..} = do
     m <- lift $ Ref.readPrimRef unRefMap
     Pipes.Select . Pipes.each $ M.toList m
-  clear RefMap{..} = Ref.writePrimRef unRefMap M.empty
 
 
 ------------------------------------------------------------------
@@ -188,7 +215,17 @@ instance (PrimMonad prim, Ord k) => Map prim (RefMap prim) k v where
 
 -- | Manual memory management monad transformer. All maps in provided by `Mame`
 -- have the same size and index span.
-type Mame buf m = RWS.RWST (m buf) () [buf] m
+type Mame buf m =
+  RWS.RWST
+  (m buf) -- ^ Monadic buffer creation
+  ()
+  [buf]   -- ^ Stack of existing, free buffers
+  m
+
+
+-- | Run a memory management monadic action.
+runMame :: Monad m => m buf -> Mame buf m a -> m a
+runMame new action = fst <$> RWS.evalRWST action new []
 
 
 -- | Pop or create a new buffer. Internal function.
@@ -321,35 +358,29 @@ marginals phi hype =
     zx = normFactor hype insNode
 
 
--- | Maps given on input to the `expected` function.
-data ExpMaps map f v = ExpMaps
-  { expMap :: map f v
-    -- ^ Expected number of occurrences of the individual features
-  , buffer :: map f v
-    -- ^ A buffer which can be used by `expected` for internal use
-  }
-
-
 -- | Expected number of occurrences of the individual features.
 --
--- TODO: Move it to `Mema` monad, get rid of `ExpMaps`.
+-- Note that it takes an existing map of expectations to update. We adopt this
+-- strategy so that epxectation maps need not be created for each hypergraph
+-- separately.
 expected
-  :: (Ord f, Flo v, PrimMonad prim, Map prim map f v)
-  => Feat Arc prim map f v
-                    -- ^ The feature function
-  -> Hype           -- ^ The underlying hypergraph
-  -> Prob Arc v     -- ^ Marginal arc probabilities in the hypergraph
-  -> ExpMaps map f v
-  -> prim ()
-expected feature hype probOn ExpMaps{..} =
-  forM_ (S.toList $ H.arcs hype) $ \i -> do
-    -- put features and their multiplicities in the buffer
-    feature i buffer
-    -- multiply the multiplicities by the probability of the arc
-    let prob = probOn i
-    modify (*prob) buffer
-    -- add the buffer to the result map
-    unionWith (+) expMap buffer
+  :: (Map prim map f v)
+  => Hype           -- ^ The underlying hypergraph
+  -> Feat Arc prim map f v
+                    -- ^ Feature function
+  -> Prob Arc v     -- ^ Arc probabilities in the hypergraph
+  -> map f v        -- ^ Existing map of expectations to update
+  -> Mame (map f v) prim ()
+expected hype feature probOn expMap =
+  withBuffer $ \buffer -> lift $ do
+    forM_ (S.toList $ H.arcs hype) $ \i -> do
+      -- put features and their multiplicities in the buffer
+      feature i buffer
+      -- multiply the multiplicities by the probability of the arc
+      let prob = probOn i
+      modify (*prob) buffer
+      -- add the buffer to the result map
+      unionWith (+) expMap buffer
 
 
 -- expected
@@ -372,39 +403,117 @@ expected feature hype probOn ExpMaps{..} =
 ------------------------------------------------------------------
 
 
+-- Random thoughts.
+--
+-- The question is now how the "global paramter map" should be represented. SGD
+-- library assumes that it's an unboxed `Double` vector. The advantage of this
+-- assumption over, e.g., using regular maps is that we need to scale the entire
+-- map with each SGD iteration. Obviously it works faster with vectors.
+--
+-- But... this way we enforce that features are ints or, at least, that there is
+-- a bijection between features and integers. So if we want to allow using this
+-- code with any `Ord f`, using vectors doesn't sound like a terribly good idea.
+--
+-- Besides, not assuming much about the form of the global map does not mean
+-- that we cannot use vectors and that the implementation cannot be efficient.
+-- So it would be better to leave this underspecified.
+--
+--
+--
+-- Now, what should we assume about the parameter values? Because we plan to use
+-- log-floats, we cannot just use `v` (signed log-floats could be a solution,
+-- but the link from the logfloat package doesn't work, so it's not clear if it
+-- is available somewhere; besides, it would be a lot of computational overhead
+-- for not that much).
+--
+-- Using a different parameter, e.g. `w`, could be a solution, but is it worth
+-- it?  Well, for our current purposes, not really, `Double`s are enough. And if
+-- we need to generalize it further later on, then we will do that later on...
+
+
 -- | Training data element.
 data Elem prim map f v = Elem
   { elemHype :: Hype
     -- ^ The hypergraph
-  , elemProb :: Prob Arc v
-    -- ^ The prior probabilities of the individual arcs
   , elemFeat :: Feat Arc prim map f v
     -- ^ Function which assigns features `f` with their counts `v` to the
     -- individual arcs in `elemHype`; consider using `defaultFeat`
+  , elemProb :: Prob Arc v
+    -- ^ Prior probabilities of the individual arcs
   , elemPot  :: Phi Arc v
-    -- ^ Arc potentials; consider using `defaultPotential`
+    -- ^ Arc potentials computed on the basis of the underning `ExpCRF` model;
+    -- consider using `defaultPotential`
   }
 
 
--- | We split the gradient into the positive and negative component, for better
--- numerical stability. At least if we perform computations in log-domain.
+-- | Update the gradient (`map f Double`) with respect to the given dataset. The
+-- function does not clear the input gradient.
+gradOn
+  :: (Ord f, Map prim map f v, Map prim map f Double)
+  => [Elem prim map f v]
+     -- ^ A list of dataset elements for which to compute the gradient
+  -> map f Double
+     -- ^ Gradient to update
+  -> Mame (map f v) prim ()
+gradOn elems grad = do
+  -- positive component
+  withBuffer $ \pos -> do
+    -- negative component
+    withBuffer $ \neg -> do
+      -- first clear both buffers
+      lift $ clear pos >> clear neg
+      let localGrad = Grad {posGrad=pos, negGrad=neg}
+      -- update the gradient w.r.t. each dataset element
+      localGradOn elems localGrad
+      -- update the global `Double`-based gradient
+      lift $ mergeGradWith grad localGrad
+
+
+-- | We split the gradient into the positive and negative components, for better
+-- numerical stability. When doing computations in log-domain, there's actually
+-- no other way (well, one could use use signed log-domain floats).
 data Grad map f v = Grad
   { posGrad :: map f v
   , negGrad :: map f v
   }
 
 
--- -- | Update the gradient with respect to the given dataset element.
--- updateGradientOn
---   :: (Map prim map f v)
---   => Elem prim map f v
---      -- ^ A dataset element for which to compute the gradient
---   -> Grad map f v
---      -- ^ The gradient so far
---   -> prim (Grad map f v)
--- updateGradientOn Elem{..} Grad{..} = do
+-- | Update the gradient (`Grad`) with respect to the given dataset.
+localGradOn
+  :: (Ord f, Map prim map f v)
+  => [Elem prim map f v]
+     -- ^ A list of dataset elements for which to compute the gradient
+  -> Grad map f v
+     -- ^ The gradient to update
+  -> Mame (map f v) prim ()
+localGradOn elems Grad{..} = do
+  -- update each dataset element
+  forM_ elems $ \Elem{..} -> do
+    -- the actual counts are computed based on priors
+    expected elemHype elemFeat elemProb posGrad
+    -- to compute expectation, we use posterior marginals instead
+    let elemMarg = marginals elemPot elemHype
+    expected elemHype elemFeat elemMarg negGrad
 
 
+-- | Update the normal domain gradient vector with the given (possibly
+-- log-domain) `Grad`.
+--
+-- TODO: we separately add `posGrad` and substract `negGrad`. Alternatively, we
+-- could try to first obtain one (possibly signed) gradient vector, and only
+-- than add it to the gradient.
+mergeGradWith
+  :: ( Map prim map f v
+     , Map prim map f Double
+     )
+  => map f Double
+  -> Grad map f v
+  -> prim ()
+mergeGradWith paraMap Grad{..} = do
+  let add param x = param + toDouble x
+      sub param x = param - toDouble x
+  unionWith add paraMap posGrad
+  unionWith sub paraMap negGrad
 
 
 -- gradOn :: Md.Model -> SGD.Para -> DAG a (X, Y) -> SGD.Grad
@@ -431,7 +540,7 @@ data Grad map f v = Grad
 -- argument, the entire hypergraph, so that `defaultPotential` can return
 -- something like `m (Phi Arc v)`.
 defaultPotential
-  :: (Flo v, PrimMonad prim, Map prim map f v)
+  :: (EnumerableMap prim map f v)
   => ExpCRF f v
   -> Hype
   -> FeatBase Arc prim map f v
@@ -467,7 +576,7 @@ defaultPotential crf hype feature =
 -- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
 -- Of course it might not be optimal in certain situations.
 defaultFeat
-  :: (Num v, PrimMonad prim, Map prim map f v)
+  :: (Map prim map f v)
   => FeatBase a prim map f v
   -> Feat a prim map f v
 defaultFeat featBase arc featMap = do
@@ -475,6 +584,31 @@ defaultFeat featBase arc featMap = do
   featMap' <- featBase arc
   unionWith (\_ x -> x) featMap featMap'
 
+
+------------------------------------------------------------------
+-- Utils
+------------------------------------------------------------------
+
+
+-- -- | One element present (`Either`) or both `a` and `b`.
+-- data OneOrBoth a b
+--   = OneOf (Either a b)
+--   | Both a b
+--   deriving (Show, Eq, Ord)
+--
+--
+-- -- | Zip two map streams (see `toList`) w.r.t. keys.
+-- zipMaps
+--   :: (Monad m)
+--   => Pipes.Producer (k, v) m ()
+--   -> Pipes.Producer (k, w) m ()
+--   -> Pipes.Producer (k, OneOrBoth v w) m ()
+-- zipMaps p1 p2 =
+--
+--   where
+--     none = do
+--
+--     left x
 
 
 ------------------------------------------------------------------
@@ -527,8 +661,6 @@ testAll = do
   phi <- defaultPotential testValue testHype testFeatBase
   let marg = marginals phi testHype
   ex <- newRefMap M.empty
-  buf <- newRefMap M.empty
-  expected (defaultFeat testFeatBase) testHype marg $ ExpMaps
-    { expMap = ex
-    , buffer = buf }
+  runMame (newRefMap M.empty) $ do
+    expected testHype (defaultFeat testFeatBase) marg ex
   print =<< Ref.readPrimRef (unRefMap ex)
