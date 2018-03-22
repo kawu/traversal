@@ -3,7 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE TypeFamilies #-}
+-- {-# LANGUAGE TypeFamilies #-}
 
 
 module NLP.Departage.CRF.Map
@@ -16,13 +16,14 @@ module NLP.Departage.CRF.Map
 , RefMap (..)
 , newRefMap
 
--- * Enumerable maps
-, EnumerableMap (..)
+-- -- * Enumerable maps
+-- , EnumerableMap (..)
 ) where
 
 
 import           Control.Monad.Primitive (PrimMonad)
 import           Control.Monad.Trans.Class (lift)
+import qualified Control.Monad.State.Strict as State
 
 import qualified Data.Map.Strict as M
 import qualified Data.Map.Merge.Strict as MM
@@ -75,14 +76,14 @@ instance Flo F.LogFloat where
 -- | A class-based representation of maps from keys to floating-point numbers,
 -- so we can plug different implementations (regular maps, hash-based maps,
 -- arrays, etc.).
-class (PrimMonad prim, Flo v) => Map prim map k v where
-  {-# MINIMAL new, modify, mergeWith #-}
+class (PrimMonad prim, Ord k, Flo v) => Map prim map k v where
+  {-# MINIMAL modify, mergeWith, toList #-}
 
-  -- | Domain descriptor, which allows to create new maps
-  type Dom k :: *
+--   -- | Domain descriptor, which allows to create new maps
+--   type Dom k :: *
 
-  -- | Create a new map whose domain is span between the given
-  new :: Dom k -> prim (map k v)
+--   -- | Create a new map whose domain is span between the given
+--   new :: Dom k -> prim (map k v)
 
   -- | Apply the function to all elements in the map
   modify :: (v -> v) -> map k v -> prim ()
@@ -96,21 +97,40 @@ class (PrimMonad prim, Flo v) => Map prim map k v where
     -> map k w
     -> prim ()
 
---   mergeWith
---     :: (v -> v -> v)
---     -> map k v
---     -> map k v
---     -> prim ()
+  -- | Stream (or pipe) of pairs in the map
+  toList :: map k v -> Pipes.ListT prim (k, v)
 
   -- | Set all elements in the map to `0`
-  clear :: Num v => map k v -> prim ()
+  --
+  -- By default implemented as `modify $ const 0`
+  clear :: map k v -> prim ()
   clear = modify $ const 0
 
+  -- | Transform the map into a pure key -> value function.
+  --
+  -- The default implementation relies on `toList` and uses an intermediate
+  -- `Data.Map`, so it's not particularly efficient.
+  freeze :: map k v -> prim (k -> Maybe v)
+  freeze m = do
+    regMap <- flip State.runStateT M.empty $ do
+      Pipes.runListT $ do
+        -- now some hoisting magic...
+        (para, val) <- Pipes.hoist lift $ toList m
+        lift . State.modify' $ M.insert para val
+    return $ \x -> M.lookup x (snd regMap)
 
--- | An extention of `Map` which allows to enumerate the keys in the map.
-class Map prim map k v => EnumerableMap prim map k v where
-  -- | The stream of keys in the map
-  toList :: map k v -> Pipes.ListT prim (k, v)
+  -- | Freeze the map as a pure key -> value function. The function is unsafe in
+  -- the sense that it doesn't guarantee that the result `k -> v` is functional
+  -- if the input changes while `k -> v` is still in use.
+  --
+  -- By default `unsafeFreeze = freeze`.
+  unsafeFreeze :: map k v -> prim (k -> Maybe v)
+  unsafeFreeze = freeze
+
+
+
+-- -- | An extention of `Map` which allows to enumerate the keys in the map.
+-- class Map prim map k v => EnumerableMap prim map k v where
 
 
 ------------------------------------------------------------------
@@ -136,10 +156,10 @@ newRefMap m = do
 instance (PrimMonad prim, Ord k, Flo v) =>
   Map prim (RefMap prim) k v where
 
-  -- We don't need to know nothing about the domain to create a new map
-  type Dom k = ()
+--   -- We don't need to know nothing about the domain to create a new map
+--   type Dom k = ()
 
-  new () = newRefMap M.empty
+--   new () = newRefMap M.empty
 
   modify f RefMap{..} = do
     m <- Ref.readPrimRef unRefMap
@@ -155,16 +175,7 @@ instance (PrimMonad prim, Ord k, Flo v) =>
           m1 m2
     Ref.writePrimRef (unRefMap ref1) merged
 
---   mergeWith f ref1 ref2 = do
---     m1 <- Ref.readPrimRef $ unRefMap ref1
---     m2 <- Ref.readPrimRef $ unRefMap ref2
---     Ref.writePrimRef (unRefMap ref1) (M.mergeWith f m1 m2)
-
   clear RefMap{..} = Ref.writePrimRef unRefMap M.empty
-
-
-instance (Map prim (RefMap prim) k v) =>
-  EnumerableMap prim (RefMap prim) k v where
 
   toList RefMap{..} = do
     m <- lift $ Ref.readPrimRef unRefMap

@@ -14,8 +14,8 @@ module NLP.Departage.CRF.SGD
 
 -- import qualified Control.Monad.Primitive as Prim
 import           Control.Monad.Primitive (PrimMonad)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Monad.Trans.Class (lift)
+import           Control.Monad.IO.Class (liftIO)
+-- import           Control.Monad.Trans.Class (lift)
 
 import qualified System.Random as R
 
@@ -169,27 +169,26 @@ sgdArgsDefault = SgdArgs
 -- performed within the `Mame` monad, which provides new vectors of the same
 -- size as the parameters vector on demand.
 sgd
-  :: (Map IO map k Double, MonadIO m)
+  :: (Map IO map k Double)
   => SgdArgs
   -- ^ SGD parameters (config)
-  -> (Int -> m ())
-  -- ^ Notification run every update
-  -> (map k Double -> [x] -> m ())
-  -- ^ Gradient for dataset elements; we allow it to be in its own monad
+  -> (Int -> Mame map k v IO ())
+  -- ^ Notification to run each update
+  -> (map k Double -> [x] -> Mame map k v IO ())
+  -- ^ Gradient for selected dataset elements; to be put in the first argument
   -> D.Dataset x
   -- ^ Dataset
   -> map k Double
   -- ^ Starting point
-  -- -> IO (map k Double)        -- ^ SGD result
-  -> Mame (map k Double) m ()
+  -> Mame map k v IO ()
 sgd SgdArgs{..} notify gradOn dataset paraMap = do
 
   -- A map for the momentum gradient
-  Mame.withBuffer $ \momentum -> do
+  Mame.withDoubleBuffer $ \momentum -> do
     liftIO $ Map.clear momentum -- TODO: necessary?
 
     -- A worker map for computing the actual gradients
-    Mame.withBuffer $ \u -> do
+    Mame.withDoubleBuffer $ \u -> do
 
       liftIO $ putStrLn $ "Running momentum!"
 
@@ -217,7 +216,7 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
     doIt momentum u k stdGen
 
       | done k > iterNum = do
-          lift $ notify k
+          notify k
 
       | otherwise = do
 
@@ -226,11 +225,11 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
             D.sample stdGen batchSize dataset
 
           -- Run notification
-          lift $ notify k
+          notify k
 
           -- Compute the gradient and put it in `u`
           liftIO (Map.clear u)
-          lift $ gradOn u batch
+          gradOn u batch
 
           liftIO $ do
 

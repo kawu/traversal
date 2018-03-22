@@ -35,7 +35,7 @@ import           Control.Monad (forM_, forM)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.IO.Class (liftIO)
 -- import qualified Control.Monad.Primitive as Prim
-import qualified Control.Monad.State.Strict as State
+-- import qualified Control.Monad.State.Strict as State
 
 -- import qualified Numeric.SGD.LogSigned as LogSigned
 -- import qualified Numeric.SGD.Momentum as SGD
@@ -57,7 +57,8 @@ import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import           NLP.Departage.CRF.Map
   (Flo(..), RefMap(..))
-import           NLP.Departage.CRF.Mame
+import           NLP.Departage.CRF.Mame (Mame)
+import qualified NLP.Departage.CRF.Mame as Mame
 
 
 ------------------------------------------------------------------
@@ -207,9 +208,9 @@ expected
                     -- ^ Feature function
   -> Prob Arc v     -- ^ Arc probabilities in the hypergraph
   -> map f v        -- ^ Existing map of expectations to update
-  -> Mame (map f v) prim ()
+  -> Mame map f v prim ()
 expected hype feature probOn expMap =
-  withBuffer $ \buffer -> lift $ do
+  Mame.withValueBuffer $ \buffer -> lift $ do
     forM_ (S.toList $ H.arcs hype) $ \i -> do
       -- put features and their multiplicities in the buffer
       feature i buffer
@@ -259,17 +260,19 @@ data Elem prim map f v = Elem
 --
 -- Note that `gradOn` does not `clear` the input gradient.
 gradOn
-  :: (Ord f, Map.Map prim map f v, Map.Map prim map f Double)
+  :: ( Map.Map prim map f v
+     , Map.Map prim map f Double
+     )
   => [(Elem prim map f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> map f Double
      -- ^ Gradient to update
-  -> Mame (map f v) prim ()
+  -> Mame map f v prim ()
 gradOn elems grad = do
   -- positive component
-  withBuffer $ \pos -> do
+  Mame.withValueBuffer $ \pos -> do
     -- negative component
-    withBuffer $ \neg -> do
+    Mame.withValueBuffer $ \neg -> do
       -- first clear both buffers
       lift $ Map.clear pos >> Map.clear neg
       let localGrad = Grad {posGrad=pos, negGrad=neg}
@@ -290,12 +293,12 @@ data Grad map f v = Grad
 
 -- | Update the gradient (`Grad`) with respect to the given dataset.
 localGradOn
-  :: (Ord f, Map.Map prim map f v)
+  :: (Map.Map prim map f v)
   => [(Elem prim map f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> Grad map f v
      -- ^ The gradient to update
-  -> Mame (map f v) prim ()
+  -> Mame map f v prim ()
 localGradOn elems Grad{..} = do
   -- update each dataset element
   forM_ elems $ \(Elem{..}, elemPhi) -> do
@@ -391,13 +394,13 @@ probability Elem{..} phi =
 -- CRF model. The function is correct only if parameters of the model do not
 -- interact (for instance, they do not multiply together).
 defaultPotential
-  :: (Map.EnumerableMap prim map f v)
+  :: (Map.Map prim map f v)
   -- => Map.Dom f  -- ^ The domain of `ExpCRF f v`
   => ExpCRF f v
   -> Hype
   -> Feat Arc prim map f v
-  -> Mame (map f v) prim (Phi Arc v)
-defaultPotential crf hype feature = withBuffer $ \featMap -> do
+  -> Mame map f v prim (Phi Arc v)
+defaultPotential crf hype feature = Mame.withValueBuffer $ \featMap -> do
   lift $ do
     fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
       acc <- Ref.newPrimRef 1
@@ -472,21 +475,23 @@ testCRF x = case x of
   _ ->     exp $  0                  -- 1
 
 
--- | Convert a given parameter map to `ExpCRF`.
-crfFromParams
-  :: (Ord f, Map.EnumerableMap prim map f Double)
-  => map f Double
-  -> prim (ExpCRF f Double)
-crfFromParams paraMap = do
-  regMap <- flip State.runStateT M.empty $ do
-    Pipes.runListT $ do
-      -- now this is hoisting magic...
-      (para, val) <- Pipes.hoist lift $ Map.toList paraMap
-      lift . State.modify' $ M.insert para val
-  return $ \x -> exp $
-    case M.lookup x (snd regMap) of
-      Nothing -> 0
-      Just v  -> v
+-- -- | Convert a given parameter map to `ExpCRF`.
+-- --
+-- -- TODO: Potentially quite inefficient!
+-- crfFromParams
+--   :: (Ord f, Map.Map prim map f Double)
+--   => map f Double
+--   -> prim (ExpCRF f Double)
+-- crfFromParams paraMap = do
+--   regMap <- flip State.runStateT M.empty $ do
+--     Pipes.runListT $ do
+--       -- now this is hoisting magic...
+--       (para, val) <- Pipes.hoist lift $ Map.toList paraMap
+--       lift . State.modify' $ M.insert para val
+--   return $ \x -> exp $
+--     case M.lookup x (snd regMap) of
+--       Nothing -> 0
+--       Just v  -> v
 
 
 testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
@@ -547,7 +552,8 @@ testSGD = do
   -- feature function
   let testFeat = defaultFeat testFeatBase
 
-  let dataList = replicate 1 $ Elem
+  -- dataset
+  let dataList = replicate 10 $ Elem
         { elemHype = testHype
         , elemFeat = testFeat
         -- below, the target probabilities
@@ -559,49 +565,51 @@ testSGD = do
             Arc _ -> error "no such arc"
         }
 
+  let withPhi xs = do
+        paraPure <- liftIO $ Map.unsafeFreeze paraMap
+        let crf x = exp $ case paraPure x of
+              Nothing -> 0
+              Just v  -> v
+        forM xs $ \x@Elem{..} -> do
+          phi <- defaultPotential crf elemHype elemFeat
+          return (x, phi)
+
   -- notification function
   let notify _ = do
-
         -- parameters
         liftIO $ do
           putStr "params: "
           print =<< Ref.readPrimRef (unRefMap paraMap)
-
         -- probability
-        crf <- liftIO $ do
-          putStr "probability: "
-          crfFromParams paraMap
-        batch <- forM dataList $ \dataElem@Elem{..} -> do
-          phi <- defaultPotential crf elemHype elemFeat
-          return (dataElem, phi)
+        liftIO $ putStr "probability: "
+        batch <- withPhi dataList
         liftIO . print . product $ map (uncurry probability) batch
 
   -- gradient computation
   let computeGradient grad batch0 = do
-        crf <- liftIO $ crfFromParams paraMap
-        -- let crf = testCRF
-        batch <- forM batch0 $ \dataElem@Elem{..} -> do
-          phi <- defaultPotential crf elemHype elemFeat
-          return (dataElem, phi)
+        batch <- withPhi batch0
         gradOn batch grad
 
   -- SGD parameters
   let sgdParams = SGD.sgdArgsDefault
         { SGD.batchSize = 1
-        , SGD.iterNum = 20
+        , SGD.iterNum = 5
         , SGD.tau = 5
-        , SGD.regVar = 4
+        , SGD.regVar = 5
+        }
+
+  -- Buffer creation
+  let makeBuff = Mame.Make
+        { Mame.mkValueBuffer = Map.newRefMap M.empty
+        , Mame.mkDoubleBuffer = Map.newRefMap M.empty
         }
 
   -- Convert the dataset
   SGD.Dataset.withVect dataList $ \dataSet -> do
-    -- Mame layer for parameter vectors (`map f v`)
-    runMame (Map.newRefMap M.empty) $ do
-      -- Mame layer for gradient computation (`map f Double`)
-      runMame (lift $ Map.newRefMap M.empty) $ do
-          SGD.sgd
-            sgdParams
-            notify
-            computeGradient
-            dataSet
-            paraMap
+    Mame.runMame makeBuff $ do
+      SGD.sgd
+        sgdParams
+        notify
+        computeGradient
+        dataSet
+        paraMap
