@@ -40,8 +40,9 @@ data Dataset a = Dataset {
     -- | A size of the dataset.
       size      :: Int
     -- | Get dataset element with a given index.  The set of indices
-    -- is of a {0, 1, .., size - 1} form.
-    , elemAt    :: Int -> IO a }
+    -- is of the form {0, 1, .., size - 1}.
+    , elemAt    :: Int -> IO a
+    }
 
 
 -------------------------------------------

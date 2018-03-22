@@ -565,6 +565,8 @@ testSGD = do
             Arc _ -> error "no such arc"
         }
 
+  -- enrich the dataset elements with potential functions, based on the current
+  -- parameter values (and using `defaultPotential`)
   let withPhi xs = do
         paraPure <- liftIO $ Map.unsafeFreeze paraMap
         let crf x = exp $ case paraPure x of
@@ -593,9 +595,11 @@ testSGD = do
   -- SGD parameters
   let sgdParams = SGD.sgdArgsDefault
         { SGD.batchSize = 1
-        , SGD.iterNum = 5
+        , SGD.iterNum = 100
+        , SGD.regVar = 1
+        , SGD.gain0 = 1
         , SGD.tau = 5
-        , SGD.regVar = 5
+        , SGD.gamma = 0.99
         }
 
   -- Buffer creation
@@ -606,6 +610,8 @@ testSGD = do
 
   -- Convert the dataset
   SGD.Dataset.withVect dataList $ \dataSet -> do
+    -- TODO: change the type of `sgd` so that it runs internally `runMame` with
+    -- provided `makeBuff`
     Mame.runMame makeBuff $ do
       SGD.sgd
         sgdParams

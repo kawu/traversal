@@ -173,9 +173,9 @@ sgd
   => SgdArgs
   -- ^ SGD parameters (config)
   -> (Int -> Mame map k v IO ())
-  -- ^ Notification to run each update
+  -- ^ Notification to run each iteration
   -> (map k Double -> [x] -> Mame map k v IO ())
-  -- ^ Gradient for selected dataset elements; to be put in the first argument
+  -- ^ Gradient computation for the selected dataset elements
   -> D.Dataset x
   -- ^ Dataset
   -> map k Double
@@ -216,16 +216,17 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
     doIt momentum u k stdGen
 
       | done k > iterNum = do
+          -- Run notification
           notify k
 
       | otherwise = do
+          -- Run notification
+          notify k
 
           -- Sample the dataset
           (batch, stdGen') <- liftIO $
             D.sample stdGen batchSize dataset
 
-          -- Run notification
-          notify k
 
           -- Compute the gradient and put it in `u`
           liftIO (Map.clear u)
