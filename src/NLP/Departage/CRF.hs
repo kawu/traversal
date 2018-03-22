@@ -7,21 +7,15 @@
 
 module NLP.Departage.CRF
 (
--- * Maps
-  Map(..)
-, RefMap(..)
-, newRefMap
-
--- * Buffers
-, Mame
-, runMame
-
 -- * CRF
-, inside
+  inside
 , outside
 , normFactor
 , marginals
 , expected
+
+-- * Probability
+, probability
 
 -- * Defaults
 , defaultPotential
@@ -32,6 +26,7 @@ module NLP.Departage.CRF
 , testValue
 , testFeatBase
 , testAll
+, testGrad
 ) where
 
 
@@ -40,8 +35,6 @@ import           Control.Monad (forM_, forM)
 -- import           Control.Monad.ST (ST)
 import           Control.Monad.Trans.Class (lift)
 -- import qualified Control.Monad.Primitive as Prim
-import           Control.Monad.Primitive (PrimMonad)
-import qualified Control.Monad.RWS.Strict as RWS
 
 -- import qualified Numeric.SGD.LogSigned as LogSigned
 -- import qualified Numeric.SGD.Momentum as SGD
@@ -53,33 +46,12 @@ import qualified Pipes as Pipes
 
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
-import qualified Data.Map.Merge.Strict as MM
 import qualified Data.MemoCombinators as Memo
-import qualified Data.Number.LogFloat as F
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
-
-
-------------------------------------------------------------------
--- Flo(ating)
-------------------------------------------------------------------
-
-
--- | A class representing floating point numbers, limited to operations which we
--- rely on.
-class Fractional a => Flo a where
-  power :: a -> a -> a
-  -- | To a double (in normal domain)
-  toDouble :: a -> Double
-
-instance Flo Double where
-  power = (**)
-  toDouble = id
-
-instance Flo F.LogFloat where
-  toDouble = F.fromLogFloat
-  power x = F.pow x . toDouble
+import           NLP.Departage.CRF.Map
+import           NLP.Departage.CRF.Mame
 
 
 ------------------------------------------------------------------
@@ -120,149 +92,6 @@ type FeatBase a prim map f v = a -> prim (map f v)
 
 
 ------------------------------------------------------------------
--- Map
-------------------------------------------------------------------
-
-
--- | A class-based representation of maps from keys to floating-point numbers,
--- so we can plug different implementations (regular maps, hash-based maps,
--- arrays, etc.).
-class (PrimMonad prim, Flo v) => Map prim map k v where
-  {-# MINIMAL modify, unionWith #-}
-
-  -- | Apply the function to all elements in the map
-  modify :: (v -> v) -> map k v -> prim ()
-
-  -- | Union of two maps with the given merging function. The result should be
-  -- stored in the first map.  Elements in the second map which are not in the
-  -- first map are ignored.
-  unionWith
-    :: Map prim map k w
-    => (v -> w -> v)
-    -> map k v
-    -> map k w
-    -> prim ()
-
---   unionWith
---     :: (v -> v -> v)
---     -> map k v
---     -> map k v
---     -> prim ()
-
-  -- | Set all elements in the map to `0`
-  clear :: Num v => map k v -> prim ()
-  clear = modify $ const 0
-
-
--- | An extention of `Map` which allows to enumerate the keys in the map.
-class Map prim map k v => EnumerableMap prim map k v where
-  -- | The stream of keys in the map
-  toList :: map k v -> Pipes.ListT prim (k, v)
-
-
--- | Referentece to a `M.Map`. We rely on a convention that the value assigned
--- to the elements not in the map is 0.
-newtype RefMap prim k v =
-  RefMap {unRefMap :: Ref.PrimRef prim (M.Map k v)}
-
-
--- | Create a `RefMap` with a given map.
-newRefMap :: PrimMonad m => M.Map k v -> m (RefMap m k v)
-newRefMap m = do
-  ref <- Ref.newPrimRef m
-  return $ RefMap ref
-
-
--- We require that `Num v` for the sake of `unionWith`: if an element is not
--- present in the map, than its value is `0`.
-instance (PrimMonad prim, Ord k, Flo v) =>
-  Map prim (RefMap prim) k v where
-
-  modify f RefMap{..} = do
-    m <- Ref.readPrimRef unRefMap
-    Ref.writePrimRef unRefMap (fmap f m)
-
-  unionWith f ref1 ref2 = do
-    m1 <- Ref.readPrimRef $ unRefMap ref1
-    m2 <- Ref.readPrimRef $ unRefMap ref2
-    let merged = MM.merge
-          MM.preserveMissing -- Preserve element if not in the second map
-          (MM.mapMissing $ const (f 0))
-          (MM.zipWithMatched $ const f)
-          m1 m2
-    Ref.writePrimRef (unRefMap ref1) merged
-
---   unionWith f ref1 ref2 = do
---     m1 <- Ref.readPrimRef $ unRefMap ref1
---     m2 <- Ref.readPrimRef $ unRefMap ref2
---     Ref.writePrimRef (unRefMap ref1) (M.unionWith f m1 m2)
-
-  clear RefMap{..} = Ref.writePrimRef unRefMap M.empty
-
-
-instance (Map prim (RefMap prim) k v) =>
-  EnumerableMap prim (RefMap prim) k v where
-
-  toList RefMap{..} = do
-    m <- lift $ Ref.readPrimRef unRefMap
-    Pipes.Select . Pipes.each $ M.toList m
-
-
-------------------------------------------------------------------
--- Manual memory management monad
-------------------------------------------------------------------
-
-
--- | Manual memory management monad transformer. All maps in provided by `Mame`
--- have the same size and index span.
-type Mame buf m =
-  RWS.RWST
-  (m buf) -- ^ Monadic buffer creation
-  ()
-  [buf]   -- ^ Stack of existing, free buffers
-  m
-
-
--- | Run a memory management monadic action.
-runMame :: Monad m => m buf -> Mame buf m a -> m a
-runMame new action = fst <$> RWS.evalRWST action new []
-
-
--- | Pop or create a new buffer. Internal function.
-popBuffer :: Monad m => Mame buf m buf
-popBuffer = do
-  free <- RWS.get
-  case free of
-    buf : rest -> do
-      RWS.put rest
-      return buf
-    _ -> do
-      new <- RWS.ask
-      lift new
-
-
--- | Return the buffer on the stack. Internal function.
-pushBuffer :: Monad m => buf -> Mame buf m ()
-pushBuffer buf = RWS.modify' (buf:)
-
-
--- | Perform a computation with a buffer.
---
--- WARNING: the computation should not return the buffer nor any direct or
--- indirect references to it. `Mame` may allocate it to other workers once the
--- computation is over.
-withBuffer
-  :: (PrimMonad prim)
-  => (buf -> Mame buf prim a)
-  -> Mame buf prim a
-withBuffer f = do
-  buf <- popBuffer
-  x <- f buf
-  pushBuffer buf
-  return x
-
-
-------------------------------------------------------------------
 -- CRF
 ------------------------------------------------------------------
 
@@ -289,6 +118,8 @@ withBuffer f = do
 
 
 -- | Compute the inside probabilities.
+--
+-- TODO: define in terms of generalized inside computation? (see `inside'`)
 inside
   :: Num v
   => Hype                    -- ^ The underlying hypergraph
@@ -380,7 +211,7 @@ expected hype feature probOn expMap =
       let prob = probOn i
       modify (*prob) buffer
       -- add the buffer to the result map
-      unionWith (+) expMap buffer
+      mergeWith (+) expMap buffer
 
 
 -- expected
@@ -440,14 +271,14 @@ data Elem prim map f v = Elem
     -- individual arcs in `elemHype`; consider using `defaultFeat`
   , elemProb :: Prob Arc v
     -- ^ Prior probabilities of the individual arcs
-  , elemPot  :: Phi Arc v
-    -- ^ Arc potentials computed on the basis of the underning `ExpCRF` model;
+  , elemPhi  :: Phi Arc v
+    -- ^ Arc potentials computed on the basis of the underlying `ExpCRF` model;
     -- consider using `defaultPotential`
   }
 
 
 -- | Update the gradient (`map f Double`) with respect to the given dataset. The
--- function does not clear the input gradient.
+-- function does not `clear` the input gradient.
 gradOn
   :: (Ord f, Map prim map f v, Map prim map f Double)
   => [Elem prim map f v]
@@ -492,7 +323,7 @@ localGradOn elems Grad{..} = do
     -- the actual counts are computed based on priors
     expected elemHype elemFeat elemProb posGrad
     -- to compute expectation, we use posterior marginals instead
-    let elemMarg = marginals elemPot elemHype
+    let elemMarg = marginals elemPhi elemHype
     expected elemHype elemFeat elemMarg negGrad
 
 
@@ -512,8 +343,8 @@ mergeGradWith
 mergeGradWith paraMap Grad{..} = do
   let add param x = param + toDouble x
       sub param x = param - toDouble x
-  unionWith add paraMap posGrad
-  unionWith sub paraMap negGrad
+  mergeWith add paraMap posGrad
+  mergeWith sub paraMap negGrad
 
 
 -- gradOn :: Md.Model -> SGD.Para -> DAG a (X, Y) -> SGD.Grad
@@ -524,6 +355,48 @@ mergeGradWith paraMap Grad{..} = do
 --     | (Md.FeatIx ix, val) <- I.expectedFeaturesIn curr (fmap fst dag) ]
 --   where
 --     curr = model { Md.values = para }
+
+
+------------------------------------------------------------------
+-- Probability
+------------------------------------------------------------------
+
+
+-- | Generalized inside computation, where prior probabilities are assigned
+-- to the individual arcs.
+inside'
+  :: Num v
+  => Hype                    -- ^ The underlying hypergraph
+  -> Phi Arc v               -- ^ The potential of arcs
+  -> Prob Arc v              -- ^ The prior probabilities of arcs
+  -> (Ins Node v, Ins Arc v) -- ^ The resulting inside probabilities
+inside' hype phi prior =
+
+  (insideNode, insideArc)
+
+  where
+
+    insideNode = Memo.wrap H.Node H.unNode Memo.integral insideNode'
+    insideNode' i
+      | S.null ingo = 1
+      | otherwise = sum
+          [ insideArc j
+          | j <- S.toList ingo ]
+      where ingo = H.incoming i hype
+
+    insideArc = Memo.wrap H.Arc  H.unArc  Memo.integral insideArc'
+    insideArc' j = prior j * phi j * product
+      [ insideNode i
+      | i <- S.toList (H.tail j hype) ]
+
+
+-- | Probability of the element (graph) in the given model.
+probability :: Flo v => Elem prim map f v -> v
+probability Elem{..} =
+  zx' / zx
+  where
+    zx' = normFactor elemHype . fst $ inside' elemHype elemPhi elemProb
+    zx =  normFactor elemHype . fst $ inside  elemHype elemPhi
 
 
 ------------------------------------------------------------------
@@ -582,33 +455,7 @@ defaultFeat
 defaultFeat featBase arc featMap = do
   clear featMap
   featMap' <- featBase arc
-  unionWith (\_ x -> x) featMap featMap'
-
-
-------------------------------------------------------------------
--- Utils
-------------------------------------------------------------------
-
-
--- -- | One element present (`Either`) or both `a` and `b`.
--- data OneOrBoth a b
---   = OneOf (Either a b)
---   | Both a b
---   deriving (Show, Eq, Ord)
---
---
--- -- | Zip two map streams (see `toList`) w.r.t. keys.
--- zipMaps
---   :: (Monad m)
---   => Pipes.Producer (k, v) m ()
---   -> Pipes.Producer (k, w) m ()
---   -> Pipes.Producer (k, OneOrBoth v w) m ()
--- zipMaps p1 p2 =
---
---   where
---     none = do
---
---     left x
+  mergeWith (\_ x -> x) featMap featMap'
 
 
 ------------------------------------------------------------------
@@ -638,11 +485,20 @@ testHype = H.fromList
 
 testValue :: ExpCRF String Double
 testValue x = case x of
-  "on1" -> 2
-  "on2" -> 0.5
-  "on3" -> 1
-  "on4" -> 2
+  "on1" -> exp $  0.6931471805599453 -- 2
+  "on2" -> exp $ -0.6931471805599453 -- 0.5
+  "on3" -> exp $  0                  -- 1
+  "on4" -> exp $  0.6931471805599453 -- 2
   _ -> 1
+
+
+-- testValue2 :: ExpCRF String Double
+-- testValue2 x = case x of
+--   "on1" -> exp $  0.6931471805599453
+--   "on2" -> exp $ -0.6931471805599453 + 0.3 + 0.11923309082120659 + 3.2104542429114646e-2
+--   "on3" -> exp $  0                  - 0.3 - 0.11923309082120659 - 3.2104542429114646e-2
+--   "on4" -> exp $  0.6931471805599453 - 0.3 - 0.11923309082120659 - 3.2104542429114646e-2
+--   _ -> 1
 
 
 testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
@@ -664,3 +520,25 @@ testAll = do
   runMame (newRefMap M.empty) $ do
     expected testHype (defaultFeat testFeatBase) marg ex
   print =<< Ref.readPrimRef (unRefMap ex)
+
+
+testGrad :: IO ()
+testGrad = do
+  phi <- defaultPotential testValue testHype testFeatBase
+  let dataElem = Elem
+        { elemHype = testHype
+        , elemFeat = defaultFeat testFeatBase
+        -- below, the target probabilities
+        , elemProb = \arc -> case arc of
+            Arc 1 -> 1.0
+            Arc 2 -> 0.0
+            Arc 3 -> 1.0
+            Arc 4 -> 1.0
+            Arc _ -> error "no such arc"
+        , elemPhi = phi
+        }
+  print $ probability dataElem
+  grad <- newRefMap M.empty
+  runMame (newRefMap M.empty) $ do
+    gradOn [dataElem] grad
+  print =<< Ref.readPrimRef (unRefMap grad)
