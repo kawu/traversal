@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 
 
 module NLP.Departage.CRF.Map
@@ -53,7 +54,21 @@ instance Flo F.LogFloat where
 
 
 ------------------------------------------------------------------
--- Map
+-- Domain
+------------------------------------------------------------------
+
+
+-- -- | A function domain descriptor.
+-- data Dom k
+--   = Set (S.Set k)
+--     -- ^ All keys are explicitely enumerated
+--   | Range (k,  k)
+--     -- ^ Only the min (`fst`) and the max keys are explicitely represented.
+--     -- All the keys in between are also a part of the domain.
+
+
+------------------------------------------------------------------
+-- Map Classes
 ------------------------------------------------------------------
 
 
@@ -61,7 +76,13 @@ instance Flo F.LogFloat where
 -- so we can plug different implementations (regular maps, hash-based maps,
 -- arrays, etc.).
 class (PrimMonad prim, Flo v) => Map prim map k v where
-  {-# MINIMAL modify, mergeWith #-}
+  {-# MINIMAL new, modify, mergeWith #-}
+
+  -- | Domain descriptor, which allows to create new maps
+  type Dom k :: *
+
+  -- | Create a new map whose domain is span between the given
+  new :: Dom k -> prim (map k v)
 
   -- | Apply the function to all elements in the map
   modify :: (v -> v) -> map k v -> prim ()
@@ -92,6 +113,11 @@ class Map prim map k v => EnumerableMap prim map k v where
   toList :: map k v -> Pipes.ListT prim (k, v)
 
 
+------------------------------------------------------------------
+-- Instances
+------------------------------------------------------------------
+
+
 -- | Referentece to a `M.Map`. We rely on a convention that the value assigned
 -- to the elements not in the map is 0.
 newtype RefMap prim k v =
@@ -109,6 +135,11 @@ newRefMap m = do
 -- present in the map, than its value is `0`.
 instance (PrimMonad prim, Ord k, Flo v) =>
   Map prim (RefMap prim) k v where
+
+  -- We don't need to know nothing about the domain to create a new map
+  type Dom k = ()
+
+  new () = newRefMap M.empty
 
   modify f RefMap{..} = do
     m <- Ref.readPrimRef unRefMap

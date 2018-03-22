@@ -172,7 +172,7 @@ sgd
   :: (Map IO map k Double, MonadIO m)
   => SgdArgs
   -- ^ SGD parameters (config)
-  -> (map k Double -> Int -> m ())
+  -> (Int -> m ())
   -- ^ Notification run every update
   -> (map k Double -> [x] -> m ())
   -- ^ Gradient for dataset elements; we allow it to be in its own monad
@@ -217,7 +217,7 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
     doIt momentum u k stdGen
 
       | done k > iterNum = do
-          lift $ notify paraMap k
+          lift $ notify k
 
       | otherwise = do
 
@@ -226,7 +226,7 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
             D.sample stdGen batchSize dataset
 
           -- Run notification
-          lift $ notify paraMap k
+          lift $ notify k
 
           -- Compute the gradient and put it in `u`
           liftIO (Map.clear u)

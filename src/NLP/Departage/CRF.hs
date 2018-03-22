@@ -23,10 +23,9 @@ module NLP.Departage.CRF
 
 -- * Tests
 , testHype
-, testValue
+, testCRF
 , testFeatBase
-, testAll
-, testGrad
+, testSGD
 ) where
 
 
@@ -34,7 +33,9 @@ import           Control.Monad (forM_, forM)
 -- import qualified Control.Monad.ST as ST
 -- import           Control.Monad.ST (ST)
 import           Control.Monad.Trans.Class (lift)
+import           Control.Monad.IO.Class (liftIO)
 -- import qualified Control.Monad.Primitive as Prim
+import qualified Control.Monad.State.Strict as State
 
 -- import qualified Numeric.SGD.LogSigned as LogSigned
 -- import qualified Numeric.SGD.Momentum as SGD
@@ -50,7 +51,12 @@ import qualified Data.MemoCombinators as Memo
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
+
+import qualified NLP.Departage.CRF.SGD as SGD
+import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
+import qualified NLP.Departage.CRF.Map as Map
 import           NLP.Departage.CRF.Map
+  (Flo(..), RefMap(..))
 import           NLP.Departage.CRF.Mame
 
 
@@ -195,7 +201,7 @@ marginals phi hype =
 -- strategy so that epxectation maps need not be created for each hypergraph
 -- separately.
 expected
-  :: (Map prim map f v)
+  :: (Map.Map prim map f v)
   => Hype           -- ^ The underlying hypergraph
   -> Feat Arc prim map f v
                     -- ^ Feature function
@@ -209,9 +215,9 @@ expected hype feature probOn expMap =
       feature i buffer
       -- multiply the multiplicities by the probability of the arc
       let prob = probOn i
-      modify (*prob) buffer
+      Map.modify (*prob) buffer
       -- add the buffer to the result map
-      mergeWith (+) expMap buffer
+      Map.mergeWith (+) expMap buffer
 
 
 -- expected
@@ -234,34 +240,6 @@ expected hype feature probOn expMap =
 ------------------------------------------------------------------
 
 
--- Random thoughts.
---
--- The question is now how the "global paramter map" should be represented. SGD
--- library assumes that it's an unboxed `Double` vector. The advantage of this
--- assumption over, e.g., using regular maps is that we need to scale the entire
--- map with each SGD iteration. Obviously it works faster with vectors.
---
--- But... this way we enforce that features are ints or, at least, that there is
--- a bijection between features and integers. So if we want to allow using this
--- code with any `Ord f`, using vectors doesn't sound like a terribly good idea.
---
--- Besides, not assuming much about the form of the global map does not mean
--- that we cannot use vectors and that the implementation cannot be efficient.
--- So it would be better to leave this underspecified.
---
---
---
--- Now, what should we assume about the parameter values? Because we plan to use
--- log-floats, we cannot just use `v` (signed log-floats could be a solution,
--- but the link from the logfloat package doesn't work, so it's not clear if it
--- is available somewhere; besides, it would be a lot of computational overhead
--- for not that much).
---
--- Using a different parameter, e.g. `w`, could be a solution, but is it worth
--- it?  Well, for our current purposes, not really, `Double`s are enough. And if
--- we need to generalize it further later on, then we will do that later on...
-
-
 -- | Training data element.
 data Elem prim map f v = Elem
   { elemHype :: Hype
@@ -271,17 +249,18 @@ data Elem prim map f v = Elem
     -- individual arcs in `elemHype`; consider using `defaultFeat`
   , elemProb :: Prob Arc v
     -- ^ Prior probabilities of the individual arcs
-  , elemPhi  :: Phi Arc v
-    -- ^ Arc potentials computed on the basis of the underlying `ExpCRF` model;
-    -- consider using `defaultPotential`
   }
 
 
--- | Update the gradient (`map f Double`) with respect to the given dataset. The
--- function does not `clear` the input gradient.
+-- | Update the gradient (`map f Double`) with respect to the given dataset. To
+-- each dataset element `Phi Arc v`, a function which gives the arc potentials
+-- computed on the basis of the underlying `ExpCRF` model, is assigned (see also
+-- `defaultPotential`).
+--
+-- Note that `gradOn` does not `clear` the input gradient.
 gradOn
-  :: (Ord f, Map prim map f v, Map prim map f Double)
-  => [Elem prim map f v]
+  :: (Ord f, Map.Map prim map f v, Map.Map prim map f Double)
+  => [(Elem prim map f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> map f Double
      -- ^ Gradient to update
@@ -292,7 +271,7 @@ gradOn elems grad = do
     -- negative component
     withBuffer $ \neg -> do
       -- first clear both buffers
-      lift $ clear pos >> clear neg
+      lift $ Map.clear pos >> Map.clear neg
       let localGrad = Grad {posGrad=pos, negGrad=neg}
       -- update the gradient w.r.t. each dataset element
       localGradOn elems localGrad
@@ -311,15 +290,15 @@ data Grad map f v = Grad
 
 -- | Update the gradient (`Grad`) with respect to the given dataset.
 localGradOn
-  :: (Ord f, Map prim map f v)
-  => [Elem prim map f v]
+  :: (Ord f, Map.Map prim map f v)
+  => [(Elem prim map f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> Grad map f v
      -- ^ The gradient to update
   -> Mame (map f v) prim ()
 localGradOn elems Grad{..} = do
   -- update each dataset element
-  forM_ elems $ \Elem{..} -> do
+  forM_ elems $ \(Elem{..}, elemPhi) -> do
     -- the actual counts are computed based on priors
     expected elemHype elemFeat elemProb posGrad
     -- to compute expectation, we use posterior marginals instead
@@ -334,8 +313,8 @@ localGradOn elems Grad{..} = do
 -- could try to first obtain one (possibly signed) gradient vector, and only
 -- than add it to the gradient.
 mergeGradWith
-  :: ( Map prim map f v
-     , Map prim map f Double
+  :: ( Map.Map prim map f v
+     , Map.Map prim map f Double
      )
   => map f Double
   -> Grad map f v
@@ -343,8 +322,8 @@ mergeGradWith
 mergeGradWith paraMap Grad{..} = do
   let add param x = param + toDouble x
       sub param x = param - toDouble x
-  mergeWith add paraMap posGrad
-  mergeWith sub paraMap negGrad
+  Map.mergeWith add paraMap posGrad
+  Map.mergeWith sub paraMap negGrad
 
 
 -- gradOn :: Md.Model -> SGD.Para -> DAG a (X, Y) -> SGD.Grad
@@ -391,12 +370,16 @@ inside' hype phi prior =
 
 
 -- | Probability of the element (graph) in the given model.
-probability :: Flo v => Elem prim map f v -> v
-probability Elem{..} =
+probability
+  :: Flo v
+  => Elem prim map f v
+  -> Phi Arc v -- ^ Arc potentials, computed on the basis of `ExpCRF`
+  -> v
+probability Elem{..} phi =
   zx' / zx
   where
-    zx' = normFactor elemHype . fst $ inside' elemHype elemPhi elemProb
-    zx =  normFactor elemHype . fst $ inside  elemHype elemPhi
+    zx' = normFactor elemHype . fst $ inside' elemHype phi elemProb
+    zx =  normFactor elemHype . fst $ inside  elemHype phi
 
 
 ------------------------------------------------------------------
@@ -407,27 +390,24 @@ probability Elem{..} =
 -- | Computes the `potential`, given the `value` and `feature` components of a
 -- CRF model. The function is correct only if parameters of the model do not
 -- interact (for instance, they do not multiply together).
---
--- NOTE: the function will not be so straightforward once the feature computing
--- function is embedded in a monad. Then we will probably need, as input
--- argument, the entire hypergraph, so that `defaultPotential` can return
--- something like `m (Phi Arc v)`.
 defaultPotential
-  :: (EnumerableMap prim map f v)
+  :: (Map.EnumerableMap prim map f v)
+  -- => Map.Dom f  -- ^ The domain of `ExpCRF f v`
   => ExpCRF f v
   -> Hype
-  -> FeatBase Arc prim map f v
-  -> prim (Phi Arc v)
-defaultPotential crf hype feature =
-  fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
-    acc <- Ref.newPrimRef 1
-    featMap <- feature arc
-    Pipes.runListT $ do
-      (feat, occNum) <- toList featMap
-      let x = crf feat `power` occNum
-      lift $ Ref.modifyPrimRef' acc (*x)
-    res <- Ref.readPrimRef acc
-    return (arc, res)
+  -> Feat Arc prim map f v
+  -> Mame (map f v) prim (Phi Arc v)
+defaultPotential crf hype feature = withBuffer $ \featMap -> do
+  lift $ do
+    fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
+      acc <- Ref.newPrimRef 1
+      Map.clear featMap >> feature arc featMap
+      Pipes.runListT $ do
+        (feat, occNum) <- Map.toList featMap
+        let x = crf feat `power` occNum
+        lift $ Ref.modifyPrimRef' acc (*x)
+      res <- Ref.readPrimRef acc
+      return (arc, res)
   where
     mkPhi xs =
       let m = M.fromList xs
@@ -449,13 +429,13 @@ defaultPotential crf hype feature =
 -- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
 -- Of course it might not be optimal in certain situations.
 defaultFeat
-  :: (Map prim map f v)
+  :: (Map.Map prim map f v)
   => FeatBase a prim map f v
   -> Feat a prim map f v
 defaultFeat featBase arc featMap = do
-  clear featMap
+  Map.clear featMap
   featMap' <- featBase arc
-  mergeWith (\_ x -> x) featMap featMap'
+  Map.mergeWith (\_ x -> x) featMap featMap'
 
 
 ------------------------------------------------------------------
@@ -483,22 +463,30 @@ testHype = H.fromList
   ]
 
 
-testValue :: ExpCRF String Double
-testValue x = case x of
+testCRF :: ExpCRF String Double
+testCRF x = case x of
   "on1" -> exp $  0.6931471805599453 -- 2
   "on2" -> exp $ -0.6931471805599453 -- 0.5
   "on3" -> exp $  0                  -- 1
   "on4" -> exp $  0.6931471805599453 -- 2
-  _ -> 1
+  _ ->     exp $  0                  -- 1
 
 
--- testValue2 :: ExpCRF String Double
--- testValue2 x = case x of
---   "on1" -> exp $  0.6931471805599453
---   "on2" -> exp $ -0.6931471805599453 + 0.3 + 0.11923309082120659 + 3.2104542429114646e-2
---   "on3" -> exp $  0                  - 0.3 - 0.11923309082120659 - 3.2104542429114646e-2
---   "on4" -> exp $  0.6931471805599453 - 0.3 - 0.11923309082120659 - 3.2104542429114646e-2
---   _ -> 1
+-- | Convert a given parameter map to `ExpCRF`.
+crfFromParams
+  :: (Ord f, Map.EnumerableMap prim map f Double)
+  => map f Double
+  -> prim (ExpCRF f Double)
+crfFromParams paraMap = do
+  regMap <- flip State.runStateT M.empty $ do
+    Pipes.runListT $ do
+      -- now this is hoisting magic...
+      (para, val) <- Pipes.hoist lift $ Map.toList paraMap
+      lift . State.modify' $ M.insert para val
+  return $ \x -> exp $
+    case M.lookup x (snd regMap) of
+      Nothing -> 0
+      Just v  -> v
 
 
 testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
@@ -507,27 +495,61 @@ testFeatBase (Arc x) = case x of
   2 -> mk1 "on2"
   3 -> mk1 "on3"
   4 -> mk1 "on4"
-  _ -> newRefMap M.empty
+  _ -> Map.newRefMap M.empty
   where
-    mk1 f = newRefMap $ M.singleton f 1
+    mk1 f = Map.newRefMap $ M.singleton f 1
 
 
-testAll :: IO ()
-testAll = do
-  phi <- defaultPotential testValue testHype testFeatBase
-  let marg = marginals phi testHype
-  ex <- newRefMap M.empty
-  runMame (newRefMap M.empty) $ do
-    expected testHype (defaultFeat testFeatBase) marg ex
-  print =<< Ref.readPrimRef (unRefMap ex)
+-- testAll :: IO ()
+-- testAll = do
+--   -- map for expected elements
+--   ex <- Map.newRefMap M.empty
+--   let testFeat = defaultFeat testFeatBase
+--   runMame (Map.newRefMap M.empty) $ do
+--     phi <- defaultPotential testValue testHype testFeat
+--     let marg = marginals phi testHype
+--     expected testHype (defaultFeat testFeatBase) marg ex
+--   print =<< Ref.readPrimRef (unRefMap ex)
 
 
-testGrad :: IO ()
-testGrad = do
-  phi <- defaultPotential testValue testHype testFeatBase
-  let dataElem = Elem
+-- testGrad :: IO ()
+-- testGrad = do
+--   -- gradient map
+--   grad <- Map.newRefMap M.empty
+--   let testFeat = defaultFeat testFeatBase
+--   -- Mame layer for parameter vectors
+--   runMame (Map.newRefMap M.empty) $ do
+--     phi <- defaultPotential testValue testHype testFeat
+--     let dataElem =
+--           ( Elem
+--             { elemHype = testHype
+--             , elemFeat = testFeat
+--             -- below, the target probabilities
+--             , elemProb = \arc -> case arc of
+--                 Arc 1 -> 1.0
+--                 Arc 2 -> 0.0
+--                 Arc 3 -> 1.0
+--                 Arc 4 -> 1.0
+--                 Arc _ -> error "no such arc"
+--             }
+--           , phi )
+--     liftIO . print $ uncurry probability dataElem
+--     gradOn [dataElem] grad
+--     liftIO $ print =<< Ref.readPrimRef (unRefMap grad)
+
+
+testSGD :: IO ()
+testSGD = do
+
+  -- parameter map
+  paraMap <- Map.newRefMap M.empty
+
+  -- feature function
+  let testFeat = defaultFeat testFeatBase
+
+  let dataList = replicate 1 $ Elem
         { elemHype = testHype
-        , elemFeat = defaultFeat testFeatBase
+        , elemFeat = testFeat
         -- below, the target probabilities
         , elemProb = \arc -> case arc of
             Arc 1 -> 1.0
@@ -535,10 +557,51 @@ testGrad = do
             Arc 3 -> 1.0
             Arc 4 -> 1.0
             Arc _ -> error "no such arc"
-        , elemPhi = phi
         }
-  print $ probability dataElem
-  grad <- newRefMap M.empty
-  runMame (newRefMap M.empty) $ do
-    gradOn [dataElem] grad
-  print =<< Ref.readPrimRef (unRefMap grad)
+
+  -- notification function
+  let notify _ = do
+
+        -- parameters
+        liftIO $ do
+          putStr "params: "
+          print =<< Ref.readPrimRef (unRefMap paraMap)
+
+        -- probability
+        crf <- liftIO $ do
+          putStr "probability: "
+          crfFromParams paraMap
+        batch <- forM dataList $ \dataElem@Elem{..} -> do
+          phi <- defaultPotential crf elemHype elemFeat
+          return (dataElem, phi)
+        liftIO . print . product $ map (uncurry probability) batch
+
+  -- gradient computation
+  let computeGradient grad batch0 = do
+        crf <- liftIO $ crfFromParams paraMap
+        -- let crf = testCRF
+        batch <- forM batch0 $ \dataElem@Elem{..} -> do
+          phi <- defaultPotential crf elemHype elemFeat
+          return (dataElem, phi)
+        gradOn batch grad
+
+  -- SGD parameters
+  let sgdParams = SGD.sgdArgsDefault
+        { SGD.batchSize = 1
+        , SGD.iterNum = 20
+        , SGD.tau = 5
+        , SGD.regVar = 4
+        }
+
+  -- Convert the dataset
+  SGD.Dataset.withVect dataList $ \dataSet -> do
+    -- Mame layer for parameter vectors (`map f v`)
+    runMame (Map.newRefMap M.empty) $ do
+      -- Mame layer for gradient computation (`map f Double`)
+      runMame (lift $ Map.newRefMap M.empty) $ do
+          SGD.sgd
+            sgdParams
+            notify
+            computeGradient
+            dataSet
+            paraMap
