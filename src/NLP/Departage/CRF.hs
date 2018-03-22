@@ -549,22 +549,6 @@ testSGD = do
   -- parameter map
   paraMap <- Map.newRefMap M.empty
 
-  -- feature function
-  let testFeat = defaultFeat testFeatBase
-
-  -- dataset
-  let dataList = replicate 10 $ Elem
-        { elemHype = testHype
-        , elemFeat = testFeat
-        -- below, the target probabilities
-        , elemProb = \arc -> case arc of
-            Arc 1 -> 1.0
-            Arc 2 -> 0.0
-            Arc 3 -> 1.0
-            Arc 4 -> 1.0
-            Arc _ -> error "no such arc"
-        }
-
   -- enrich the dataset elements with potential functions, based on the current
   -- parameter values (and using `defaultPotential`)
   let withPhi xs = do
@@ -577,15 +561,18 @@ testSGD = do
           return (x, phi)
 
   -- notification function
-  let notify _ = do
-        -- parameters
-        liftIO $ do
-          putStr "params: "
-          print =<< Ref.readPrimRef (unRefMap paraMap)
-        -- probability
-        liftIO $ putStr "probability: "
-        batch <- withPhi dataList
-        liftIO . print . product $ map (uncurry probability) batch
+  let notify k
+        | doneTotal k == doneTotal (k - 1) =
+            liftIO $ putStr "."
+        | otherwise = do
+            -- parameters
+            liftIO $ do
+              putStrLn "" >> putStr "params: "
+              print =<< Ref.readPrimRef (unRefMap paraMap)
+            -- probability
+            liftIO $ putStr "probability: "
+            batch <- withPhi dataList
+            liftIO . print . product $ map (uncurry probability) batch
 
   -- gradient computation
   let computeGradient grad batch0 = do
@@ -594,12 +581,12 @@ testSGD = do
 
   -- SGD parameters
   let sgdParams = SGD.sgdArgsDefault
-        { SGD.batchSize = 1
-        , SGD.iterNum = 100
-        , SGD.regVar = 1
-        , SGD.gain0 = 1
+        { SGD.batchSize = batchSize
+        , SGD.iterNum = 10
+        , SGD.regVar = 4
+        , SGD.gain0 = 0.25
         , SGD.tau = 5
-        , SGD.gamma = 0.99
+        , SGD.gamma = 0.9
         }
 
   -- Buffer creation
@@ -619,3 +606,29 @@ testSGD = do
         computeGradient
         dataSet
         paraMap
+
+  where
+
+    -- dataset
+    dataList = replicate 1000 $ Elem
+      { elemHype = testHype
+      , elemFeat = defaultFeat testFeatBase
+      -- below, the target probabilities
+      , elemProb = \arc -> case arc of
+          Arc 1 -> 1.0
+          Arc 2 -> 0.0
+          Arc 3 -> 1.0
+          Arc 4 -> 1.0
+          Arc _ -> error "no such arc"
+      }
+
+    batchSize = 30
+    trainSize = length dataList
+
+    doneTotal :: Int -> Int
+    doneTotal = floor . done
+
+    done :: Int -> Double
+    done i
+        = fromIntegral (i * batchSize)
+        / fromIntegral trainSize
