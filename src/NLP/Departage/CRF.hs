@@ -40,14 +40,14 @@ import           Control.Monad.IO.Class (liftIO)
 -- import qualified Numeric.SGD.LogSigned as LogSigned
 -- import qualified Numeric.SGD.Momentum as SGD
 
+import qualified Data.Set as S
+import qualified Data.Map.Strict as M
+import qualified Data.MemoCombinators as Memo
+import qualified Data.Number.LogFloat as F
 import qualified Data.PrimRef as Ref
 
 import qualified Pipes as Pipes
 -- import           Streaming.Prelude (Stream, Of)
-
-import qualified Data.Set as S
-import qualified Data.Map.Strict as M
-import qualified Data.MemoCombinators as Memo
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
@@ -494,7 +494,8 @@ testCRF x = case x of
 --       Just v  -> v
 
 
-testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
+-- testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
+testFeatBase :: FeatBase Arc IO (RefMap IO) String F.LogFloat
 testFeatBase (Arc x) = case x of
   1 -> mk1 "on1"
   2 -> mk1 "on2"
@@ -553,7 +554,7 @@ testSGD = do
   -- parameter values (and using `defaultPotential`)
   let withPhi xs = do
         paraPure <- liftIO $ Map.unsafeFreeze paraMap
-        let crf x = exp $ case paraPure x of
+        let crf x = F.logToLogFloat $ case paraPure x of
               Nothing -> 0
               Just v  -> v
         forM xs $ \x@Elem{..} -> do

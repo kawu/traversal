@@ -180,3 +180,7 @@ instance (PrimMonad prim, Ord k, Flo v) =>
   toList RefMap{..} = do
     m <- lift $ Ref.readPrimRef unRefMap
     Pipes.Select . Pipes.each $ M.toList m
+
+  freeze RefMap{..} = do
+    m <- Ref.readPrimRef unRefMap
+    return $ \x -> M.lookup x m
