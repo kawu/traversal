@@ -199,8 +199,7 @@ final hype =
 ------------------------------------------------------------------
 
 
--- | Create a hypergraph from a list of nodes together with the
--- incoming arcs.
+-- | Create a hypergraph from a list of nodes together with the incoming arcs.
 fromList :: [(Node, M.Map Arc (S.Set Node))] -> Hype
 fromList xs = Hype
   newNodeMap

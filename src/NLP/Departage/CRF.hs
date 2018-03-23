@@ -21,6 +21,10 @@ module NLP.Departage.CRF
 , defaultPotential
 , defaultFeat
 
+-- * Training
+, Elem(..)
+, gradOn
+
 -- * Tests
 , testHype
 , testCRF
