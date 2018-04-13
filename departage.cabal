@@ -38,11 +38,13 @@ library
       , filepath            >= 1.3      && < 1.5
       , temporary           >= 1.1      && < 1.3
       , random              >= 1.0      && < 1.2
+      , text
 
 
     exposed-modules:
         NLP.Departage.DepTree
-        NLP.Departage.DepTree.AsHype
+      , NLP.Departage.DepTree.AsHype
+      , NLP.Departage.DepTree.Cupt
       , NLP.Departage.Parser.Item
       , NLP.Departage.Parser.Arc
       , NLP.Departage.Parser.BottomUp
@@ -52,6 +54,7 @@ library
       , NLP.Departage.CRF.Mame
       , NLP.Departage.CRF.SGD
       , NLP.Departage.CRF.SGD.Dataset
+      , NLP.Departage.Prob
 
     -- other-modules:
 

@@ -39,18 +39,22 @@ import qualified Data.Traversable as Trav
 
 import qualified NLP.Departage.Hype as Hype
 import qualified NLP.Departage.DepTree as Dep
+import qualified NLP.Departage.Prob as P
 
 
 -- | A dependency tree to encode (rose representation), with the set of
 -- potential labels assigned to each node (note that the goal is to disambiguate
 -- over node labels).
-type DepTree a b = R.Tree (S.Set a, Maybe b)
+-- type DepTree a b = R.Tree (S.Set a, Maybe b)
+type DepTree a b = R.Tree (P.Prob a, Maybe b)
 
 
 -- | Encoding result.
 data EncHype a b = EncHype
   { encHype :: Hype.Hype
     -- ^ The actually encoded hypergraph
+  , arcProb :: Hype.Arc -> Double
+    -- ^ Arc probabilities
   , nodeLabel :: Hype.Node -> (a, Maybe b)
     -- ^ A label assigned to a hypernode corresponds to (i) the original node
     -- label, and (i) the original label assigned to the arc between the node
@@ -71,7 +75,10 @@ printEncHype EncHype{..} = do
   forM_ (S.toList $ Hype.arcs encHype) $ \arc -> do
     putStr (show $ Hype.head arc encHype)
     putStr " <= "
-    putStrLn (show $ Hype.tail arc encHype)
+    putStr (show $ Hype.tail arc encHype)
+    putStr " ("
+    putStr (show $ arcProb arc)
+    putStrLn ")"
 
 
 -- | Encode the given dependency tree as a hypergraph.
@@ -82,11 +89,14 @@ encodeAsHype
 encodeAsHype depTree =
 
   EncHype
-  { encHype = hypeFromList (M.toList arcMap)
+  { encHype = encodedHype
+  , arcProb = \x -> arcProbMap M.! x
   , nodeLabel = \x -> labMap M.! x
   }
 
   where
+
+    (encodedHype, arcProbMap) = hypeFromList . M.toList $ fmap P.fromList arcMap
 
     (arcMap, labMap) = flip State.execState (M.empty, M.empty) $ do
       go Nothing Nothing [identifyLabels depTree]
@@ -99,14 +109,21 @@ encodeAsHype depTree =
     go _ _ [] = return ()
 
 
+-- | A mapping from hypergraph nodes to labels and the corresponding
+-- probabilities.
+type NodeMap a = M.Map Hype.Node (a, Double)
+
+
 -- encode (Just (parLabMap, mayParArc)) (Just (sisLabSet, maySisArc)) =
 encode
-  :: Maybe (M.Map Hype.Node a, Maybe b)
-  -> Maybe (M.Map Hype.Node a, Maybe b)
-  -> (M.Map Hype.Node a, Maybe b)
+  :: Maybe (NodeMap a, Maybe b)
+  -> Maybe (NodeMap a, Maybe b)
+  -> (NodeMap a, Maybe b)
   -> State.State
-     ( M.Map Hype.Node [S.Set Hype.Node]
+     ( M.Map Hype.Node [(S.Set Hype.Node, Double)]
+       -- ^ For each hypernode, the list of incoming arcs and their probabilities
      , M.Map Hype.Node (a, Maybe b)
+       -- ^ For each hypernode, the corresponding label pair (node label, parent label)
      ) ()
 encode parent sister this =
 
@@ -116,24 +133,27 @@ encode parent sister this =
     lift $ addLabel (fst target) (snd target)
     tail1 <- Trav.traverse split parent
     tail2 <- Trav.traverse split sister
-    lift . addEdge (fst target) . map fst $ catMaybes [tail1, tail2]
+    lift . addEdge target $ catMaybes [tail1, tail2]
 
   where
 
-    addLabel node label =
+    addLabel node (nodeLabel, _prob, mayArcLabel) =
       State.modify' . Arr.second $
-        M.insert node label
+        M.insert node (nodeLabel, mayArcLabel)
 
-    addEdge target tails =
+    addEdge (targetNode, (_, targetProb, _)) tails = do
+      let tailNodes =          map (\(node, (_, _prob, _)) -> node) tails
+          tailProb = product $ map (\(_node, (_, prob, _)) -> prob) tails
+          tailAll = (S.fromList tailNodes, tailProb * targetProb)
       State.modify' . Arr.first $
         let alter = Just . \case
-              Nothing -> [S.fromList tails]
-              Just xs -> S.fromList tails : xs
-        in  M.alter alter target
+              Nothing -> [tailAll]
+              Just xs -> tailAll : xs
+        in  M.alter alter targetNode
 
     split (labMap, mayArc) = do
-      (nodeID, label) <- each $ M.toList labMap
-      return $ (nodeID, (label, mayArc))
+      (nodeID, (label, prob)) <- each $ M.toList labMap
+      return $ (nodeID, (label, prob, mayArc))
 
     each = Pipes.Select . Pipes.each
 
@@ -141,32 +161,38 @@ encode parent sister this =
 -- | Identify the tree in a way that each node/label pair obtains a unique ID
 -- (node ID `Hype.Node`).
 identifyLabels
-  :: R.Tree (S.Set a, b)
-  -> R.Tree (M.Map Hype.Node a, b)
+  -- :: R.Tree (S.Set a, b)
+  :: R.Tree (P.Prob a, b)
+  -> R.Tree (NodeMap a, b)
 identifyLabels =
   flip State.evalState 0 . Trav.traverse identify
   where
-    identify (labSet, other) = do
+    identify (labProb, other) = do
       i0 <- State.get
       let labMap = M.fromList
-            [ (Hype.Node i, lab)
-            | (i, lab) <- zip [i0..] (S.toList labSet)
+            [ (Hype.Node i, lp)
+            | (i, lp) <- zip [i0..] (P.toList labProb)
             ]
-      State.put (i0 + S.size labSet)
+      State.put (i0 + M.size (P.unProb labProb))
       return (labMap, other)
 
 
--- | Create a hypergraph from a list of arcs. An abstraction over
--- `Hype.fromList`, which needlessly requires arc IDs. Note that the sets of
--- nodes representing arcs should be distinct.
-hypeFromList :: [(Hype.Node, [S.Set Hype.Node])] -> Hype.Hype
-hypeFromList =
-  Hype.fromList . snd . L.mapAccumL update 0
+-- | Create an arc-weighted hypergraph from a list of arcs. An abstraction over
+-- `Hype.fromList`, which needlessly requires arc IDs.
+hypeFromList
+  :: [(Hype.Node, P.Prob (S.Set Hype.Node))]
+  -> (Hype.Hype, M.Map Hype.Arc Double)
+-- hypeFromList :: [(Hype.Node, [S.Set Hype.Node])] -> Hype.Hype
+hypeFromList input =
+  ( Hype.fromList . map (Arr.second $ fmap fst) $ hypeList
+  , M.unions . map (fmap snd . snd) $ hypeList
+  )
   where
+    hypeList = snd $ L.mapAccumL update 0 input
     update p (target, tails) =
       let tails' = M.fromList
-            [ (Hype.Arc i, tailSet)
-            | (i, tailSet) <- zip [p..] tails ]
+            [ (Hype.Arc i, tailAndProb)
+            | (i, tailAndProb) <- zip [p..] (P.toList tails) ]
           q = p + length tails'
       in  (q, (target, tails'))
 
@@ -184,7 +210,7 @@ testAsHype = do
     encHype = encodeAsHype (Dep.toRose depTree)
   printEncHype encHype
   where
-    binary = S.fromList [False, True]
+    binary = P.fromList [(False, 0.5), (True, 0.5)]
     mkT xs = Dep.Tree
       { Dep.root = binary
       , children = map (,()) xs }
