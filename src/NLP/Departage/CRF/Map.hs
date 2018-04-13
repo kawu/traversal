@@ -40,7 +40,7 @@ import qualified Pipes as Pipes
 
 -- | A class representing floating point numbers, limited to operations which we
 -- rely on.
-class Fractional a => Flo a where
+class (Ord a, Fractional a) => Flo a where
   power :: a -> a -> a
   -- | To a double (in normal domain)
   toDouble :: a -> Double
@@ -76,7 +76,7 @@ instance Flo F.LogFloat where
 -- | A class-based representation of maps from keys to floating-point numbers,
 -- so we can plug different implementations (regular maps, hash-based maps,
 -- arrays, etc.).
-class (PrimMonad prim, Ord k, Flo v) => Map prim map k v where
+class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v where
   {-# MINIMAL modify, mergeWith, toList #-}
 
 --   -- | Domain descriptor, which allows to create new maps
@@ -153,7 +153,7 @@ newRefMap m = do
 
 -- We require that `Num v` for the sake of `mergeWith`: if an element is not
 -- present in the map, than its value is `0`.
-instance (PrimMonad prim, Ord k, Flo v) =>
+instance (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) =>
   Map prim (RefMap prim) k v where
 
 --   -- We don't need to know nothing about the domain to create a new map

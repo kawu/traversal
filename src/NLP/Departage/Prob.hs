@@ -18,6 +18,7 @@ import qualified Data.Map.Strict as M
 
 -- | A probability distribution over items of type `a`.
 newtype Prob a = Prob {unProb :: M.Map a Double}
+  deriving (Show, Eq, Ord)
 
 
 -- | Probability smart constructor.

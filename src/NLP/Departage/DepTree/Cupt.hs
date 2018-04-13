@@ -12,6 +12,7 @@ module NLP.Departage.DepTree.Cupt
   , TokID
   , MweID
   , MweTyp
+  , chosen
 
     -- * Parsing
   , readCupt
@@ -44,7 +45,7 @@ data Token = Token
     -- ^ Language-specific POS
   , feats :: M.Map T.Text T.Text
     -- ^ List of morphological features from the universal feature inventory or from a defined language-specific extension; underscore if not available.
-  , topHead :: TokID
+  , dephead :: TokID
     -- ^ Head of the current word, which is either a value of ID or zero [0].
   , deprel :: T.Text
     -- ^ Universal dependency relation to the HEAD (root iff HEAD = 0) or a defined language-specific subtype of one.
@@ -70,6 +71,11 @@ type MweID = Int
 
 -- | MWE type.
 type MweTyp = T.Text
+
+
+-- | Is the token in the chosen segmentation?
+chosen :: Token -> Bool
+chosen tok = upos tok /= "_"
 
 
 -- | Read an entire Cupt file.
@@ -104,7 +110,7 @@ parseToken line =
       , upos = upos'
       , xpos = xpos'
       , feats = parseFeats feats'
-      , topHead = parseTokID head'
+      , dephead = parseTokID head'
       , deprel = deprel'
       , deps = deps'
       , misc = misc'

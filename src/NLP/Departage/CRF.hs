@@ -27,7 +27,6 @@ module NLP.Departage.CRF
 
 -- * Tests
 , testHype
-, testCRF
 , testFeatBase
 , testSGD
 ) where
@@ -63,6 +62,8 @@ import           NLP.Departage.CRF.Map
   (Flo(..), RefMap(..))
 import           NLP.Departage.CRF.Mame (Mame)
 import qualified NLP.Departage.CRF.Mame as Mame
+
+import Debug.Trace (trace)
 
 
 ------------------------------------------------------------------
@@ -193,11 +194,23 @@ normFactor hype ins = sum $ do
 -- function.
 marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
 marginals phi hype =
-  \arc -> insArc arc * outArc arc / zx
+  \arc ->
+    let
+      prob = insArc arc * outArc arc / zx
+    in
+      if prob > 1.0 + eps
+      -- then error ("marginal probability = " ++ show (toDouble prob))
+      then error $ show
+           ( arc
+           , toDouble $ insArc arc
+           , toDouble $ outArc arc
+           , toDouble zx )
+      else prob
   where
     ( insNode, insArc) = inside hype phi
     (_outNode, outArc) = outside hype insNode insArc
     zx = normFactor hype insNode
+    eps = 1e-3
 
 
 -- | Expected number of occurrences of the individual features.
@@ -311,6 +324,16 @@ localGradOn elems Grad{..} = do
     -- to compute expectation, we use posterior marginals instead
     let elemMarg = marginals elemPhi elemHype
     expected elemHype elemFeat elemMarg negGrad
+  liftIO $ putStrLn "# POS GRAD"
+  lift $ do
+    Pipes.runListT $ do
+      (key, val) <- Map.toList posGrad
+      liftIO . print $ Map.toDouble val
+  liftIO $ putStrLn "# NEG GRAD"
+  lift $ do
+    Pipes.runListT $ do
+      (key, val) <- Map.toList negGrad
+      liftIO . print $ Map.toDouble val
 
 
 -- | Update the normal domain gradient vector with the given (possibly
@@ -452,100 +475,53 @@ defaultFeat featBase arc featMap = do
 
 testHype :: Hype
 testHype = H.fromList
-  [ ( Node 1, M.empty )
-  , ( Node 2, M.empty )
-  , ( Node 3, M.fromList
-      [ (Arc 1, S.fromList [Node 1]) ]
+--   [ ( Node {unNode = 0}, M.empty )
+  [ ( Node {unNode = 0}, M.fromList
+      [ (Arc 0, S.empty) ] -- (1.0)
     )
-  , ( Node 4, M.fromList
-      [ (Arc 2, S.fromList [Node 2, Node 3]) ]
+--   , ( Node {unNode = 1}, M.fromList
+--       [ (Arc 1, S.empty) ] -- (0.0)
+--     )
+  , ( Node {unNode = 2}, M.fromList
+      [ (Arc 2, S.fromList [Node {unNode = 0}]) -- (1.0)
+      -- , (Arc 3, S.fromList [Node {unNode = 1}]) -- (0.0)
+      ]
     )
-  , ( Node 5, M.empty )
-  , ( Node 6, M.fromList
-      [ (Arc 3, S.fromList [Node 2, Node 5]) ]
-    )
-  , ( Node 7, M.fromList
-      [ (Arc 4, S.fromList [Node 3, Node 6]) ]
+--   , ( Node {unNode = 3}, M.fromList
+--       [ (Arc 4, S.fromList [Node {unNode = 0}]) -- (0.0)
+--       -- , (Arc 5, S.fromList [Node {unNode = 1}]) -- (0.0)
+--       ]
+--     )
+--   , ( Node {unNode = 4}, M.fromList
+--       [ (Arc 6, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (0.0)
+-- --       , (Arc 7, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
+-- --       , (Arc 8, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
+-- --       , (Arc 9, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
+--       ]
+--     )
+  , ( Node {unNode = 5}, M.fromList
+      [ (Arc 10, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (1.0)
+--       , (Arc 11, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
+--       , (Arc 12, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
+--       , (Arc 13, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
+      ]
     )
   ]
 
 
-testCRF :: ExpCRF String Double
-testCRF x = case x of
-  "on1" -> exp $  0.6931471805599453 -- 2
-  "on2" -> exp $ -0.6931471805599453 -- 0.5
-  "on3" -> exp $  0                  -- 1
-  "on4" -> exp $  0.6931471805599453 -- 2
-  _ ->     exp $  0                  -- 1
+testProb :: Arc -> F.LogFloat
+testProb (Arc x) = case x of
+  0 -> 1.0
+  2 -> 1.0
+  10 -> 1.0
+  _ -> 0.0
 
 
--- -- | Convert a given parameter map to `ExpCRF`.
--- --
--- -- TODO: Potentially quite inefficient!
--- crfFromParams
---   :: (Ord f, Map.Map prim map f Double)
---   => map f Double
---   -> prim (ExpCRF f Double)
--- crfFromParams paraMap = do
---   regMap <- flip State.runStateT M.empty $ do
---     Pipes.runListT $ do
---       -- now this is hoisting magic...
---       (para, val) <- Pipes.hoist lift $ Map.toList paraMap
---       lift . State.modify' $ M.insert para val
---   return $ \x -> exp $
---     case M.lookup x (snd regMap) of
---       Nothing -> 0
---       Just v  -> v
-
-
--- testFeatBase :: FeatBase Arc IO (RefMap IO) String Double
 testFeatBase :: FeatBase Arc IO (RefMap IO) String F.LogFloat
-testFeatBase (Arc x) = case x of
-  1 -> mk1 "on1"
-  2 -> mk1 "on2"
-  3 -> mk1 "on3"
-  4 -> mk1 "on4"
-  _ -> Map.newRefMap M.empty
+testFeatBase (Arc x) =
+  mk1 $ "on" ++ show x
   where
     mk1 f = Map.newRefMap $ M.singleton f 1
-
-
--- testAll :: IO ()
--- testAll = do
---   -- map for expected elements
---   ex <- Map.newRefMap M.empty
---   let testFeat = defaultFeat testFeatBase
---   runMame (Map.newRefMap M.empty) $ do
---     phi <- defaultPotential testValue testHype testFeat
---     let marg = marginals phi testHype
---     expected testHype (defaultFeat testFeatBase) marg ex
---   print =<< Ref.readPrimRef (unRefMap ex)
-
-
--- testGrad :: IO ()
--- testGrad = do
---   -- gradient map
---   grad <- Map.newRefMap M.empty
---   let testFeat = defaultFeat testFeatBase
---   -- Mame layer for parameter vectors
---   runMame (Map.newRefMap M.empty) $ do
---     phi <- defaultPotential testValue testHype testFeat
---     let dataElem =
---           ( Elem
---             { elemHype = testHype
---             , elemFeat = testFeat
---             -- below, the target probabilities
---             , elemProb = \arc -> case arc of
---                 Arc 1 -> 1.0
---                 Arc 2 -> 0.0
---                 Arc 3 -> 1.0
---                 Arc 4 -> 1.0
---                 Arc _ -> error "no such arc"
---             }
---           , phi )
---     liftIO . print $ uncurry probability dataElem
---     gradOn [dataElem] grad
---     liftIO $ print =<< Ref.readPrimRef (unRefMap grad)
 
 
 testSGD :: IO ()
@@ -619,12 +595,7 @@ testSGD = do
       { elemHype = testHype
       , elemFeat = defaultFeat testFeatBase
       -- below, the target probabilities
-      , elemProb = \arc -> case arc of
-          Arc 1 -> 1.0
-          Arc 2 -> 0.0
-          Arc 3 -> 1.0
-          Arc 4 -> 1.0
-          Arc _ -> error "no such arc"
+      , elemProb = testProb
       }
 
     batchSize = 30
@@ -637,3 +608,134 @@ testSGD = do
     done i
         = fromIntegral (i * batchSize)
         / fromIntegral trainSize
+
+
+-- testHype :: Hype
+-- testHype = H.fromList
+--   [ ( Node 1, M.empty )
+--   , ( Node 2, M.empty )
+--   , ( Node 3, M.fromList
+--       [ (Arc 1, S.fromList [Node 1]) ]
+--     )
+--   , ( Node 4, M.fromList
+--       [ (Arc 2, S.fromList [Node 2, Node 3]) ]
+--     )
+--   , ( Node 5, M.empty )
+--   , ( Node 6, M.fromList
+--       [ (Arc 3, S.fromList [Node 2, Node 5]) ]
+--     )
+--   , ( Node 7, M.fromList
+--       [ (Arc 4, S.fromList [Node 3, Node 6]) ]
+--     )
+--   ]
+--
+--
+-- testCRF :: ExpCRF String Double
+-- testCRF x = case x of
+--   "on1" -> exp $  0.6931471805599453 -- 2
+--   "on2" -> exp $ -0.6931471805599453 -- 0.5
+--   "on3" -> exp $  0                  -- 1
+--   "on4" -> exp $  0.6931471805599453 -- 2
+--   _ ->     exp $  0                  -- 1
+--
+--
+-- testFeatBase :: FeatBase Arc IO (RefMap IO) String F.LogFloat
+-- testFeatBase (Arc x) = case x of
+--   1 -> mk1 "on1"
+--   2 -> mk1 "on2"
+--   3 -> mk1 "on3"
+--   4 -> mk1 "on4"
+--   _ -> Map.newRefMap M.empty
+--   where
+--     mk1 f = Map.newRefMap $ M.singleton f 1
+--
+--
+-- testSGD :: IO ()
+-- testSGD = do
+--
+--   -- parameter map
+--   paraMap <- Map.newRefMap M.empty
+--
+--   -- enrich the dataset elements with potential functions, based on the current
+--   -- parameter values (and using `defaultPotential`)
+--   let withPhi xs = do
+--         paraPure <- liftIO $ Map.unsafeFreeze paraMap
+--         let crf x = F.logToLogFloat $ case paraPure x of
+--               Nothing -> 0
+--               Just v  -> v
+--         forM xs $ \x@Elem{..} -> do
+--           phi <- defaultPotential crf elemHype elemFeat
+--           return (x, phi)
+--
+--   -- notification function
+--   let notify k
+--         | doneTotal k == doneTotal (k - 1) =
+--             liftIO $ putStr "."
+--         | otherwise = do
+--             -- parameters
+--             liftIO $ do
+--               putStrLn "" >> putStr "params: "
+--               print =<< Ref.readPrimRef (unRefMap paraMap)
+--             -- probability
+--             liftIO $ putStr "probability: "
+--             batch <- withPhi dataList
+--             liftIO . print . product $ map (uncurry probability) batch
+--
+--   -- gradient computation
+--   let computeGradient grad batch0 = do
+--         batch <- withPhi batch0
+--         gradOn batch grad
+--
+--   -- SGD parameters
+--   let sgdParams = SGD.sgdArgsDefault
+--         { SGD.batchSize = batchSize
+--         , SGD.iterNum = 10
+--         , SGD.regVar = 4
+--         , SGD.gain0 = 0.25
+--         , SGD.tau = 5
+--         , SGD.gamma = 0.9
+--         }
+--
+--   -- Buffer creation
+--   let makeBuff = Mame.Make
+--         { Mame.mkValueBuffer = Map.newRefMap M.empty
+--         , Mame.mkDoubleBuffer = Map.newRefMap M.empty
+--         }
+--
+--   -- Convert the dataset
+--   SGD.Dataset.withVect dataList $ \dataSet -> do
+--     -- TODO: change the type of `sgd` so that it runs internally `runMame` with
+--     -- provided `makeBuff`
+--     Mame.runMame makeBuff $ do
+--       SGD.sgd
+--         sgdParams
+--         notify
+--         computeGradient
+--         dataSet
+--         paraMap
+--
+--   where
+--
+--     -- dataset
+--     dataList = replicate 1000 $ Elem
+--       { elemHype = testHype
+--       , elemFeat = defaultFeat testFeatBase
+--       -- below, the target probabilities
+--       , elemProb = \arc -> case arc of
+--           Arc 1 -> 1.0
+--           Arc 2 -> 0.0
+--           Arc 3 -> 1.0
+--           Arc 4 -> 1.0
+--           Arc _ -> error "no such arc"
+--       }
+--
+--     batchSize = 30
+--     trainSize = length dataList
+--
+--     doneTotal :: Int -> Int
+--     doneTotal = floor . done
+--
+--     done :: Int -> Double
+--     done i
+--         = fromIntegral (i * batchSize)
+--         / fromIntegral trainSize

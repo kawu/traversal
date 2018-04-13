@@ -15,11 +15,12 @@
 
 module NLP.Departage.DepTree.AsHype
   ( DepTree
-  , EncHype
+  , EncHype (..)
   , encodeAsHype
 
   -- * Temporary
   , testAsHype
+  , printEncHype
   ) where
 
 
@@ -45,8 +46,7 @@ import qualified NLP.Departage.Prob as P
 -- | A dependency tree to encode (rose representation), with the set of
 -- potential labels assigned to each node (note that the goal is to disambiguate
 -- over node labels).
--- type DepTree a b = R.Tree (S.Set a, Maybe b)
-type DepTree a b = R.Tree (P.Prob a, Maybe b)
+type DepTree a b = R.Tree (P.Prob a, b)
 
 
 -- | Encoding result.
@@ -55,7 +55,7 @@ data EncHype a b = EncHype
     -- ^ The actually encoded hypergraph
   , arcProb :: Hype.Arc -> Double
     -- ^ Arc probabilities
-  , nodeLabel :: Hype.Node -> (a, Maybe b)
+  , nodeLabel :: Hype.Node -> (a, b)
     -- ^ A label assigned to a hypernode corresponds to (i) the original node
     -- label, and (i) the original label assigned to the arc between the node
     -- and its parent.
@@ -116,13 +116,13 @@ type NodeMap a = M.Map Hype.Node (a, Double)
 
 -- encode (Just (parLabMap, mayParArc)) (Just (sisLabSet, maySisArc)) =
 encode
-  :: Maybe (NodeMap a, Maybe b)
-  -> Maybe (NodeMap a, Maybe b)
-  -> (NodeMap a, Maybe b)
+  :: Maybe (NodeMap a, b)
+  -> Maybe (NodeMap a, b)
+  -> (NodeMap a, b)
   -> State.State
      ( M.Map Hype.Node [(S.Set Hype.Node, Double)]
        -- ^ For each hypernode, the list of incoming arcs and their probabilities
-     , M.Map Hype.Node (a, Maybe b)
+     , M.Map Hype.Node (a, b)
        -- ^ For each hypernode, the corresponding label pair (node label, parent label)
      ) ()
 encode parent sister this =
@@ -182,7 +182,6 @@ identifyLabels =
 hypeFromList
   :: [(Hype.Node, P.Prob (S.Set Hype.Node))]
   -> (Hype.Hype, M.Map Hype.Arc Double)
--- hypeFromList :: [(Hype.Node, [S.Set Hype.Node])] -> Hype.Hype
 hypeFromList input =
   ( Hype.fromList . map (Arr.second $ fmap fst) $ hypeList
   , M.unions . map (fmap snd . snd) $ hypeList
