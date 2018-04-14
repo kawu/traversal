@@ -20,6 +20,7 @@ module NLP.Departage.Hype
 
 -- * Intermediate operations
 , final
+, start
 
 -- * Construction
 , fromList
@@ -75,7 +76,7 @@ module NLP.Departage.Hype
 
 
 import Prelude hiding (head, tail)
--- import           Control.Applicative ((<$>))
+import Control.Monad (guard)
 -- import qualified Data.Foldable as F
 -- import qualified Data.Traversable as T
 -- import qualified Data.Array as A
@@ -89,6 +90,8 @@ import qualified Data.Map.Strict as M
 -- import Data.Binary (Binary, get, put, putWord8, getWord8)
 -- import Data.Vector.Binary ()
 -- import qualified Data.Binary as B
+
+import Debug.Trace (trace)
 
 
 ------------------------------------------------------------------
@@ -177,7 +180,7 @@ outgoing i =
 ------------------------------------------------------------------
 
 
--- | Return the set of final node.
+-- | Return the set of final nodes.
 --
 -- TODO: reimplement by using `outgoing`.
 --
@@ -192,6 +195,18 @@ final hype =
       i <- S.toList (nodes hype)
       j <- S.toList (incoming i hype)
       return $ tail j hype
+    -- report s = trace ("final: " ++ show (S.size s)) s
+
+
+-- | Return the set of start nodes.
+start :: Hype -> S.Set Node
+start hype = S.fromList $ do
+  i <- S.toList (nodes hype)
+  let arcs = S.toList (incoming i hype)
+  guard $ all (S.null . flip tail hype) arcs
+  return i
+--   where
+--     report s = trace ("start: " ++ show (S.size s)) s
 
 
 ------------------------------------------------------------------

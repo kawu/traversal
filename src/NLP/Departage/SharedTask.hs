@@ -51,8 +51,7 @@ type MWE = Bool
 ----------------------------------------------
 
 
--- !!!TODO!!!: make sure, that the order of tokens is preserved (as far as it is
--- possible)
+-- !!!TODO!!!: make sure, that the surface ordering of tokens is preserved!!!
 
 
 -- | Encode a Cupt sentence as a dependency tree.
@@ -98,44 +97,46 @@ encodeCupt toks0 =
 ----------------------------------------------
 
 
--- | Type of the binary feature -- does it correspond to the parent, or the
--- sister node?
-data BinType
-  = Parent
-  | Sister
-  deriving (Show, Eq, Ord)
+-- -- | Type of the binary feature -- does it correspond to the parent, or the
+-- -- sister node?
+-- data BinType
+--   = Parent
+--   | Sister
+--   deriving (Show, Eq, Ord)
 
 
 -- | CRF feature type. TODO: somehow add info about dependency labels.
 data Feat
-  = Binary1
+  = ParentFeat
     { prevTag :: MWE
     , currTag :: MWE
     , prevOrth :: T.Text
-    , binType :: BinType
+    , currOrth :: T.Text
     }
-  | Binary2
+  | SisterFeat
     { prevTag :: MWE
     , currTag :: MWE
+    , prevOrth :: T.Text
     , currOrth :: T.Text
-    , binType :: BinType
     }
+--   | Binary1
+--     { prevTag :: AH.Label MWE
+--     , currTag :: AH.Label MWE
+--     , prevOrth :: T.Text
+--     , binType :: BinType
+--     }
+--   | Binary2
+--     { prevTag :: AH.Label MWE
+--     , currTag :: AH.Label MWE
+--     , currOrth :: T.Text
+--     , binType :: BinType
+--     }
   | Unary
     { currTag :: MWE
     , currOrth :: T.Text
     }
-  | C
-    { ok :: Bool
-    }
---   | CU
---     { currTag :: MWE
---     , currGold :: MWE
---     }
---   | CB
---     { currTag :: MWE
---     , currGold :: MWE
---     , prevTag :: MWE
---     , prevGold :: MWE
+--   | C
+--     { ok :: Bool
 --     }
   deriving (Show, Eq, Ord)
 
@@ -152,10 +153,10 @@ mkElem depTree =
   , CRF.elemFeat = CRF.defaultFeat $ \arcID -> do
       let arcHead = H.head arcID hype
           arcTail = H.tail arcID hype
---           featList = case S.toList arcTail of
---             [] -> mkUnary arcHead
---             xs -> concatMap (mkBinary arcHead) xs
-          featList = mkCheat arcHead $ S.toList arcTail 
+          featList = case S.toList arcTail of
+            [] -> mkUnary arcHead
+            xs -> concatMap (mkBinary arcHead) xs
+          -- featList = mkCheat arcHead $ S.toList arcTail
       Map.newRefMap . M.fromList $ map (,1) featList
   }
 
@@ -164,12 +165,27 @@ mkElem depTree =
     encoded = AH.encodeAsHype depTree
     hype =  AH.encHype encoded
 
---     mkBinary arcHead arcTail =
---       let
---         (headMWE, headTok) = AH.nodeLabel encoded arcHead
---         (tailMWE, tailTok) = AH.nodeLabel encoded arcTail
---         isParent = Cupt.dephead headTok == Cupt.tokID tailTok
---         typ = if isParent then Parent else Sister
+    mkBinary arcHead arcTail
+      | isParent =
+          [ ParentFeat
+            { prevTag = AH.origLabel tailMWE
+            , currTag = AH.origLabel headMWE
+            , prevOrth = Cupt.orth tailTok
+            , currOrth = Cupt.orth headTok
+            }
+          ]
+      | otherwise =
+          [ SisterFeat
+            { prevTag = AH.origLabel tailMWE
+            , currTag = AH.origLabel headMWE
+            , prevOrth = Cupt.orth tailTok
+            , currOrth = Cupt.orth headTok
+            }
+          ]
+      where
+        (headMWE, headTok) = AH.nodeLabel encoded arcHead
+        (tailMWE, tailTok) = AH.nodeLabel encoded arcTail
+        isParent = Cupt.dephead headTok == Cupt.tokID tailTok
 --       in
 --         [ Binary1
 --           { prevTag = tailMWE
@@ -184,27 +200,28 @@ mkElem depTree =
 --           , binType = typ
 --           }
 --         ]
--- --         [ Unary
--- --           { currTag = headMWE
--- --           , currOrth = Cupt.orth headTok
--- --           }
--- --         ]
---
---     mkUnary arcHead =
---       let
---         (headMWE, headTok) = AH.nodeLabel encoded arcHead
---       in
---         Unary
---         { currTag = headMWE
---         , currOrth = Cupt.orth headTok
---         }
+--         [ Unary
+--           { currTag = headMWE
+--           , currOrth = Cupt.orth headTok
+--           }
+--         ]
 
-    mkCheat arcHead arcTails =
+    mkUnary arcHead =
       let
-        isOK (mwe, tok) = mwe /= (Cupt.mwe tok == [])
+        (headMWE, headTok) = AH.nodeLabel encoded arcHead
       in
-        [ C . all isOK $ map (AH.nodeLabel encoded) (arcHead:arcTails)
+        [ Unary
+          { currTag = AH.origLabel headMWE
+          , currOrth = Cupt.orth headTok
+          }
         ]
+
+--     mkCheat arcHead arcTails =
+--       let
+--         isOK (mwe, tok) = AH.origLabel mwe /= (Cupt.mwe tok == [])
+--       in
+--         [ C . all isOK $ map (AH.nodeLabel encoded) (arcHead:arcTails)
+--         ]
 
 
 -- | Train disambiguation module.
@@ -267,10 +284,10 @@ train sgdArgsT trainData = do -- evalData = do
   let computeGradient grad batch0 = do
         batch <- withPhi $ map fromSent batch0
         CRF.gradOn batch grad
-        liftIO $ do
-          putStrLn "# GRADIENT"
-          gradMap <- Ref.readPrimRef $ Map.unRefMap grad
-          print gradMap
+--         liftIO $ do
+--           putStrLn "# GRADIENT"
+--           gradMap <- Ref.readPrimRef $ Map.unRefMap grad
+--           print gradMap
 
 --   -- SGD parameters
 --   let sgdParams = SGD.sgdArgsDefault

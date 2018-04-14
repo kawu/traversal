@@ -190,27 +190,39 @@ normFactor hype ins = sum $ do
   return $ ins i
 
 
+-- | Compute the normalization factor.
+normFactor' :: Num v => Hype -> Ins Node v -> Out Node v -> v
+normFactor' hype ins out = sum $ do
+  i <- S.toList (H.start hype)
+  return $ ins i * out i
+
+
 -- | Compute marginal probabilities of the individual arcs given the potential
 -- function.
 marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
-marginals phi hype =
-  \arc ->
-    let
-      prob = insArc arc * outArc arc / zx
-    in
-      if prob > 1.0 + eps
-      -- then error ("marginal probability = " ++ show (toDouble prob))
-      then error $ show
-           ( arc
-           , toDouble $ insArc arc
-           , toDouble $ outArc arc
-           , toDouble zx )
-      else prob
+marginals phi hype
+  | not (zx `almostEq` zx') = trace warning margs
+  | otherwise = margs
   where
-    ( insNode, insArc) = inside hype phi
-    (_outNode, outArc) = outside hype insNode insArc
-    zx = normFactor hype insNode
-    eps = 1e-3
+    margs = \arc ->
+      let
+        prob = insArc arc * outArc arc / zx
+      in
+        if prob > 1.0 + eps
+        -- then error ("marginal probability = " ++ show (toDouble prob))
+        then error . ("marginals: " ++ ) $ show
+             ( arc
+             , toDouble $ insArc arc
+             , toDouble $ outArc arc
+             , toDouble zx )
+        else prob
+    warning =
+      "[marginals] normalization factors differ significantly: "
+      ++ show (toLogDouble zx, toLogDouble zx')
+    (insNode, insArc) = inside hype phi
+    (outNode, outArc) = outside hype insNode insArc
+    zx  = normFactor  hype insNode
+    zx' = normFactor' hype insNode outNode
 
 
 -- | Expected number of occurrences of the individual features.
@@ -324,16 +336,16 @@ localGradOn elems Grad{..} = do
     -- to compute expectation, we use posterior marginals instead
     let elemMarg = marginals elemPhi elemHype
     expected elemHype elemFeat elemMarg negGrad
-  liftIO $ putStrLn "# POS GRAD"
-  lift $ do
-    Pipes.runListT $ do
-      (key, val) <- Map.toList posGrad
-      liftIO . print $ Map.toDouble val
-  liftIO $ putStrLn "# NEG GRAD"
-  lift $ do
-    Pipes.runListT $ do
-      (key, val) <- Map.toList negGrad
-      liftIO . print $ Map.toDouble val
+--   liftIO $ putStrLn "# POS GRAD"
+--   lift $ do
+--     Pipes.runListT $ do
+--       (key, val) <- Map.toList posGrad
+--       liftIO . print $ Map.toDouble val
+--   liftIO $ putStrLn "# NEG GRAD"
+--   lift $ do
+--     Pipes.runListT $ do
+--       (key, val) <- Map.toList negGrad
+--       liftIO . print $ Map.toDouble val
 
 
 -- | Update the normal domain gradient vector with the given (possibly
@@ -466,6 +478,30 @@ defaultFeat featBase arc featMap = do
   Map.clear featMap
   featMap' <- featBase arc
   Map.mergeWith (\_ x -> x) featMap featMap'
+
+
+------------------------------------------------------------------
+-- Utils
+------------------------------------------------------------------
+
+
+almostEq :: Flo v => v -> v -> Bool
+almostEq x0 y0
+  | isZero x && isZero y = True
+  | otherwise = 1.0 - eps < z && z < 1.0 + eps
+  where
+    x = toLogDouble x0
+    y = toLogDouble y0
+    z = x / y
+
+
+isZero :: (Fractional t, Ord t) => t -> Bool
+isZero x = abs x < eps
+
+
+-- | A very small number.
+eps :: Fractional t => t
+eps = 0.000001
 
 
 ------------------------------------------------------------------

@@ -44,14 +44,18 @@ class (Ord a, Fractional a) => Flo a where
   power :: a -> a -> a
   -- | To a double (in normal domain)
   toDouble :: a -> Double
+  -- | To a double (in log domain)
+  toLogDouble :: a -> Double
 
 instance Flo Double where
   power = (**)
   toDouble = id
+  toLogDouble = log
 
 instance Flo F.LogFloat where
-  toDouble = F.fromLogFloat
   power x = F.pow x . toDouble
+  toDouble = F.fromLogFloat
+  toLogDouble = F.logFromLogFloat
 
 
 ------------------------------------------------------------------
