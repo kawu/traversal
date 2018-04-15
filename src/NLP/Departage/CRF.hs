@@ -190,19 +190,22 @@ normFactor hype ins = sum $ do
   return $ ins i
 
 
--- | Compute the normalization factor.
-normFactor' :: Num v => Hype -> Ins Node v -> Out Node v -> v
-normFactor' hype ins out = sum $ do
-  i <- S.toList (H.start hype)
-  return $ ins i * out i
+-- NOTE: It's likely that this computation is incorrect! After all, the
+-- choice of the individual start hypernodes is not independent!
+-- -- | Compute the normalization factor.
+-- normFactor' :: Num v => Hype -> Ins Node v -> Out Node v -> v
+-- normFactor' hype ins out = sum $ do
+--   i <- S.toList (H.start hype)
+--   return $ ins i * out i
 
 
 -- | Compute marginal probabilities of the individual arcs given the potential
 -- function.
 marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
 marginals phi hype
-  | not (zx `almostEq` zx') = trace warning margs
-  | otherwise = margs
+  = margs
+--   | not (zx `almostEq` zx') = trace warning margs
+--   | otherwise = margs
   where
     margs = \arc ->
       let
@@ -216,13 +219,13 @@ marginals phi hype
              , toDouble $ outArc arc
              , toDouble zx )
         else prob
-    warning =
-      "[marginals] normalization factors differ significantly: "
-      ++ show (toLogDouble zx, toLogDouble zx')
+--     warning =
+--       "[marginals] normalization factors differ significantly: "
+--       ++ show (toLogDouble zx, toLogDouble zx')
     (insNode, insArc) = inside hype phi
     (outNode, outArc) = outside hype insNode insArc
     zx  = normFactor  hype insNode
-    zx' = normFactor' hype insNode outNode
+--     zx' = normFactor' hype insNode outNode
 
 
 -- | Expected number of occurrences of the individual features.

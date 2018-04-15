@@ -20,7 +20,7 @@ module NLP.Departage.Hype
 
 -- * Intermediate operations
 , final
-, start
+-- , start
 
 -- * Construction
 , fromList
@@ -195,16 +195,16 @@ final hype =
       i <- S.toList (nodes hype)
       j <- S.toList (incoming i hype)
       return $ tail j hype
-    -- report s = trace ("final: " ++ show (S.size s)) s
+    report s = trace ("final: " ++ show (S.size s)) s
 
 
--- | Return the set of start nodes.
-start :: Hype -> S.Set Node
-start hype = S.fromList $ do
-  i <- S.toList (nodes hype)
-  let arcs = S.toList (incoming i hype)
-  guard $ all (S.null . flip tail hype) arcs
-  return i
+-- -- | Return the set of start nodes.
+-- start :: Hype -> S.Set Node
+-- start hype = S.fromList $ do
+--   i <- S.toList (nodes hype)
+--   let arcs = S.toList (incoming i hype)
+--   guard $ all (S.null . flip tail hype) arcs
+--   return i
 --   where
 --     report s = trace ("start: " ++ show (S.size s)) s
 

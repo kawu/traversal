@@ -59,10 +59,11 @@ data EncHype a b = EncHype
   , arcProb :: Hype.Arc -> Double
     -- ^ Arc probabilities
   , nodeLabel :: Hype.Node -> (Label a, b)
---   , nodeLabel :: Hype.Node -> (a, b)
     -- ^ A label assigned to a hypernode corresponds to (i) enriched original
-    -- node label, and (ii) the original label assigned to the arc between the
-    -- node and its parent.
+    -- node label, and (ii) the original label assigned to the token/arc between
+    -- the node and its parent.
+  , nodeParent :: Hype.Node -> Maybe b
+    -- ^ Original token/arc label assigned to node's parent
   }
 
 
@@ -99,6 +100,9 @@ data EncodingState a b = EncodingState
     -- label) and the corresponding probability (in the middle)
   , encCounter :: Int
     -- ^ Counter for generating new node IDs
+  , encParentMap :: M.Map Hype.Node (Maybe b)
+    -- ^ Map which assigns to each node the token/arc label assigned to its
+    -- parent
   }
 
 
@@ -107,6 +111,7 @@ newEncodingState = EncodingState
   { encIncomingMap = M.empty
   , encLabelMap = M.empty
   , encCounter = 0
+  , encParentMap = M.empty
   }
 
 
@@ -127,6 +132,12 @@ onCounter :: (Int -> Int) -> EncodingState a b -> EncodingState a b
 onCounter f st = st {encCounter = f (encCounter st)}
 
 
+onParentMap
+  :: (M.Map Hype.Node (Maybe b) -> M.Map Hype.Node (Maybe b))
+  -> EncodingState a b -> EncodingState a b
+onParentMap f st = st {encParentMap = f (encParentMap st)}
+
+
 -- | Encode the given dependency tree as a hypergraph.
 -- TODO: should there be other features related to dependency tree leaves?
 encodeAsHype
@@ -139,15 +150,14 @@ encodeAsHype depTree =
   { encHype = encodedHype
   , arcProb = \arc ->
       let
-        -- hd = S.toList (Hype.head arc encodedHype)
         hd = Hype.head arc encodedHype
         tl = S.toList (Hype.tail arc encodedHype)
       in
-        -- product (map nodeProb hd) * product (map nodeProb tl)
         nodeProb hd * product (map nodeProb tl)
   , nodeLabel = \x ->
       let (a, _, b) = labMap M.! x
       in  (a, b)
+  , nodeParent = \x -> parMap M.! x
   }
 
   where
@@ -155,21 +165,22 @@ encodeAsHype depTree =
     encodedHype = hypeFromList (M.toList arcMap)
     nodeProb node = _2 (labMap M.! node)
 
-    EncodingState arcMap labMap _ = flip State.execState newEncodingState $ do
+    EncodingState arcMap labMap _ parMap = flip State.execState newEncodingState $ do
       goR depTree
 
-    goR tree = goF Nothing [tree]
+    goR tree = goF Nothing Nothing [tree]
 
-    goF parProb (tree : forest) = do
+    goF parProb parLabel (tree : forest) = do
       let (nodeProb, arcLabel) = R.rootLabel tree
       nodeMap <- mkNodeMap parProb nodeProb
-      childMapMay <- goF (Just nodeProb) (R.subForest tree)
-      sisterMapMay <- goF parProb forest
+      childMapMay <- goF (Just nodeProb) (Just arcLabel) (R.subForest tree)
+      sisterMapMay <- goF parProb parLabel forest
       encodeEdge nodeMap childMapMay sisterMapMay
       forM_ (M.toList nodeMap) $ \(node, (label, prob)) -> do
         addLabel node (label, prob, arcLabel)
+        addParentLabel node parLabel
       return $ Just nodeMap
-    goF _ [] = return Nothing
+    goF _ _ [] = return Nothing
 
 --     goF prevLabel prevTyp (tree : forest) = do
 --       let treeLabel = R.rootLabel tree
@@ -297,6 +308,15 @@ addLabel
   -> State.State (EncodingState a b) ()
 addLabel node x =
   State.modify' . onLabelMap $
+    M.insert node x
+
+
+addParentLabel
+  :: Hype.Node
+  -> Maybe b
+  -> State.State (EncodingState a b) ()
+addParentLabel node x =
+  State.modify' . onParentMap $
     M.insert node x
 
 

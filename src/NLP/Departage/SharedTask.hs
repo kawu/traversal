@@ -16,6 +16,8 @@ module NLP.Departage.SharedTask
 import           Control.Monad (forM)
 import           Control.Monad.IO.Class (liftIO)
 
+import           Data.Ord (comparing)
+import           Data.Maybe (maybeToList)
 import qualified Data.List as L
 import qualified Data.Tree as R
 import qualified Data.Map.Strict as M
@@ -35,6 +37,8 @@ import qualified NLP.Departage.CRF.SGD as SGD
 import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.CRF.Mame as Mame
+
+import Debug.Trace (trace)
 
 
 ----------------------------------------------
@@ -108,9 +112,9 @@ encodeCupt toks0 =
 -- | CRF feature type. TODO: somehow add info about dependency labels.
 data Feat
   = ParentFeat
-    { prevTag :: MWE
+    { parentTag :: MWE
     , currTag :: MWE
-    , prevOrth :: T.Text
+    , parentOrth :: T.Text
     , currOrth :: T.Text
     }
   | SisterFeat
@@ -153,16 +157,9 @@ mkElem depTree =
   , CRF.elemFeat = CRF.defaultFeat $ \arcID -> do
       let arcHead = H.head arcID hype
           arcTail = H.tail arcID hype
-          featList = case S.toList arcTail of
-            -- [] -> concatMap mkUnary (S.toList arcHead)
-            [] -> mkUnary arcHead
-            xs -> concatMap (mkBinary arcHead) xs
---             xs -> concat
---               [ mkBinary hd tl
---               | hd <- S.toList arcHead
---               , tl <- xs
---               ]
-          -- featList = mkCheat arcHead $ S.toList arcTail
+          featList =
+            mkUnary arcHead ++
+            concatMap (mkBinary arcHead) (S.toList arcTail)
       Map.newRefMap . M.fromList $ map (,1) featList
   }
 
@@ -172,55 +169,40 @@ mkElem depTree =
     hype =  AH.encHype encoded
 
     mkBinary arcHead arcTail
-      | isParent =
-          [ ParentFeat
-            { prevTag = AH.origLabel tailMWE
-            , currTag = AH.origLabel headMWE
-            , prevOrth = Cupt.orth tailTok
-            , currOrth = Cupt.orth headTok
-            }
-          ]
-      | otherwise =
+      | isSister =
           [ SisterFeat
-            { prevTag = AH.origLabel tailMWE
-            , currTag = AH.origLabel headMWE
-            , prevOrth = Cupt.orth tailTok
-            , currOrth = Cupt.orth headTok
+            { currTag = AH.origLabel tailMWE
+            , prevTag = AH.origLabel headMWE
+            , currOrth = Cupt.orth tailTok
+            , prevOrth = Cupt.orth headTok
             }
           ]
+      | otherwise = []
       where
         (headMWE, headTok) = AH.nodeLabel encoded arcHead
         (tailMWE, tailTok) = AH.nodeLabel encoded arcTail
-        isParent = Cupt.dephead headTok == Cupt.tokID tailTok
---       in
---         [ Binary1
---           { prevTag = tailMWE
---           , currTag = headMWE
---           , prevOrth = Cupt.orth tailTok
---           , binType = typ
---           }
---         , Binary2
---           { prevTag = tailMWE
---           , currTag = headMWE
---           , currOrth = Cupt.orth headTok
---           , binType = typ
---           }
---         ]
---         [ Unary
---           { currTag = headMWE
---           , currOrth = Cupt.orth headTok
---           }
---         ]
+        isSister = Cupt.dephead tailTok /= Cupt.tokID headTok
+        -- isParent = Cupt.dephead tailTok == Cupt.tokID headTok
+        -- report x = trace (show x) x
 
     mkUnary arcHead =
       let
         (headMWE, headTok) = AH.nodeLabel encoded arcHead
-      in
-        [ Unary
+        unary = Unary
           { currTag = AH.origLabel headMWE
           , currOrth = Cupt.orth headTok
           }
-        ]
+        binary = maybeToList $ do
+          parTok <- AH.nodeParent encoded arcHead
+          parTag <- AH.parentLabel headMWE
+          return $ ParentFeat
+            { parentTag = parTag
+            , currTag = AH.origLabel headMWE
+            , parentOrth = Cupt.orth parTok
+            , currOrth = Cupt.orth headTok
+            }
+      in
+        unary : binary
 
 --     mkCheat arcHead arcTails =
 --       let
@@ -278,8 +260,13 @@ train sgdArgsT trainData = do -- evalData = do
               putStrLn ""
               Ref.readPrimRef (Map.unRefMap paraMap) >>= \m -> do
                 putStr "num param: " >> print (M.size m)
-                putStr "min param: " >> print (take 1 . L.sort $ M.elems m)
-                putStr "max param: " >> print (take 1 . reverse . L.sort $ M.elems m)
+                let sortParams = L.sort . M.elems
+                putStr "min param: " >> print (take 1 $ sortParams m)
+                putStr "max param: " >> print (take 1 . reverse $ sortParams m)
+                -- let sortParams = L.sortBy (comparing snd) . M.toList
+                -- putStrLn "min params: " >> mapM_ print (take 10 $ sortParams m)
+                -- putStrLn "max params: " >> mapM_ print (take 10 . reverse $ sortParams m)
+                -- putStrLn "params: " >> mapM_ print (sortParams m)
             -- probability
             liftIO $ putStr "train probability: "
             -- batch <- withPhi =<< liftIO (map fromSent <$> trainData)
