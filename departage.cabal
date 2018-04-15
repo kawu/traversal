@@ -47,7 +47,7 @@ library
       , NLP.Departage.DepTree.Cupt
       , NLP.Departage.Parser.Item
       , NLP.Departage.Parser.Arc
-      , NLP.Departage.Parser.BottomUp
+      -- , NLP.Departage.Parser.BottomUp
       , NLP.Departage.Hype
       , NLP.Departage.CRF
       , NLP.Departage.CRF.Map

@@ -179,8 +179,8 @@ outside hype insideNode insideArc =
           ) / insideNode i
       where outgo = H.outgoing i hype
 
-    -- outsideArc = Memo.wrap H.Arc  H.unArc  Memo.integral outsideArc'
     outsideArc j = outsideNode (H.head j hype)
+    -- outsideArc j = product [outsideNode node | node <- S.toList (H.head j hype)]
 
 
 -- | Compute the normalization factor.
@@ -209,7 +209,7 @@ marginals phi hype
         prob = insArc arc * outArc arc / zx
       in
         if prob > 1.0 + eps
-        -- then error ("marginal probability = " ++ show (toDouble prob))
+--         then prob
         then error . ("marginals: " ++ ) $ show
              ( arc
              , toDouble $ insArc arc
@@ -543,6 +543,12 @@ testHype = H.fromList
       ]
     )
   ]
+--   where
+--     localFromList xs = H.fromList
+--       [ (S.singleton target, arc, sourceSet)
+--       | (target, incoMap) <- xs
+--       , (arc, sourceSet) <- M.toList incoMap
+--       ]
 
 
 testProb :: Arc -> F.LogFloat

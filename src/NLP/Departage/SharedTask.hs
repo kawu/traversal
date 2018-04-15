@@ -154,8 +154,14 @@ mkElem depTree =
       let arcHead = H.head arcID hype
           arcTail = H.tail arcID hype
           featList = case S.toList arcTail of
+            -- [] -> concatMap mkUnary (S.toList arcHead)
             [] -> mkUnary arcHead
             xs -> concatMap (mkBinary arcHead) xs
+--             xs -> concat
+--               [ mkBinary hd tl
+--               | hd <- S.toList arcHead
+--               , tl <- xs
+--               ]
           -- featList = mkCheat arcHead $ S.toList arcTail
       Map.newRefMap . M.fromList $ map (,1) featList
   }

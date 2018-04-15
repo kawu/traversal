@@ -165,14 +165,14 @@ tail j =
 incoming :: Node -> Hype -> S.Set Arc
 incoming i =
   maybe (error errMsg) insSet . M.lookup i . nodeMap
-  where errMsg = "Hype.incoming: unknown node"
+  where errMsg = "Hype.incoming: unknown node " ++ show i
 
 
 -- | The set of arcs outgoing from a given node.
 outgoing :: Node -> Hype -> S.Set Arc
 outgoing i =
   maybe (error errMsg) outSet . M.lookup i . nodeMap
-  where errMsg = "Hype.outgoing: unknown node"
+  where errMsg = "Hype.outgoing: unknown node " ++ show i
 
 
 ------------------------------------------------------------------
