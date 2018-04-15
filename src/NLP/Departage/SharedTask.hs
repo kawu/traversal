@@ -59,12 +59,12 @@ type MWE = Bool
 
 
 -- | Encode a Cupt sentence as a dependency tree.
-encodeCupt :: Cupt.Sent -> AH.DepTree MWE Cupt.Token
+encodeCupt :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
 encodeCupt toks0 =
 
   case S.toList (childMap M.! [0]) of
-    [rootID] -> go rootID
-    _ -> error "SharedTask.encodeCupt: several roots?"
+    [rootID] -> Just $ go rootID
+    _ -> trace "SharedTask.encodeCupt: several roots?" Nothing
 
   where
 
