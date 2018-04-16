@@ -16,7 +16,7 @@ module NLP.Departage.SharedTask
 import           Control.Monad (forM)
 import           Control.Monad.IO.Class (liftIO)
 
-import           Data.Ord (comparing)
+-- import           Data.Ord (comparing)
 import           Data.Maybe (maybeToList)
 import qualified Data.List as L
 import qualified Data.Tree as R
@@ -153,7 +153,7 @@ mkElem depTree =
 
   CRF.Elem
   { CRF.elemHype = hype
-  , CRF.elemProb = F.logFloat <$> AH.arcProb encoded
+  , CRF.elemProb = F.logFloat <$> AH.encArcProb encoded
   , CRF.elemFeat = CRF.defaultFeat $ \arcID -> do
       let arcHead = H.head arcID hype
           arcTail = H.tail arcID hype
@@ -165,7 +165,7 @@ mkElem depTree =
 
   where
 
-    encoded = AH.encodeAsHype depTree
+    encoded = AH.encodeTree depTree
     hype =  AH.encHype encoded
 
     mkBinary arcHead arcTail
@@ -179,21 +179,25 @@ mkElem depTree =
           ]
       | otherwise = []
       where
-        (headMWE, headTok) = AH.nodeLabel encoded arcHead
-        (tailMWE, tailTok) = AH.nodeLabel encoded arcTail
+        headMWE = AH.encLabel encoded arcHead
+        headTok = AH.encToken encoded (AH.encNode encoded arcHead)
+        tailMWE = AH.encLabel encoded arcTail
+        tailTok = AH.encToken encoded (AH.encNode encoded arcTail)
+        -- (headMWE, headTok) = AH.nodeLabel encoded arcHead
+        -- (tailMWE, tailTok) = AH.nodeLabel encoded arcTail
         isSister = Cupt.dephead tailTok /= Cupt.tokID headTok
-        -- isParent = Cupt.dephead tailTok == Cupt.tokID headTok
-        -- report x = trace (show x) x
 
     mkUnary arcHead =
       let
-        (headMWE, headTok) = AH.nodeLabel encoded arcHead
+        -- (headMWE, headTok) = AH.nodeLabel encoded arcHead
+        headMWE = AH.encLabel encoded arcHead
+        headTok = AH.encToken encoded (AH.encNode encoded arcHead)
         unary = Unary
           { currTag = AH.origLabel headMWE
           , currOrth = Cupt.orth headTok
           }
         binary = maybeToList $ do
-          parTok <- AH.nodeParent encoded arcHead
+          parTok <- AH.encParent encoded arcHead
           parTag <- AH.parentLabel headMWE
           return $ ParentFeat
             { parentTag = parTag
@@ -212,13 +216,17 @@ mkElem depTree =
 --         ]
 
 
+-- | A particular CRF model (IO embedded parameter map).
+type ParaMap = Map.RefMap IO Feat Double
+
+
 -- | Train disambiguation module.
 train
     :: SGD.SgdArgs                  -- ^ SGD configuration
     -> [AH.DepTree MWE Cupt.Token]  -- ^ Training data
-    -- -> [AH.DepTree MWE Cupt.Token]  -- ^ Evaluation data
-    -> IO ()
-train sgdArgsT trainData = do -- evalData = do
+    -> [AH.DepTree MWE Cupt.Token]  -- ^ Development data
+    -> IO ParaMap
+train sgdArgsT trainData devData = do
 
   -- parameter map
   paraMap <- Map.newRefMap M.empty
@@ -250,6 +258,12 @@ train sgdArgsT trainData = do -- evalData = do
           phi <- CRF.defaultPotential crf elemHype elemFeat
           return (x, phi)
 
+  -- dataset probability
+  let dataProb dataset = do
+        -- batch <- withPhi =<< liftIO (map fromSent <$> trainData)
+        batch <- withPhi (map fromSent dataset)
+        return . F.logFromLogFloat . product $ map (uncurry CRF.probability) batch
+
   -- notification function
   let notify k
         | doneTotal k == doneTotal (k - 1) =
@@ -269,9 +283,9 @@ train sgdArgsT trainData = do -- evalData = do
                 -- putStrLn "params: " >> mapM_ print (sortParams m)
             -- probability
             liftIO $ putStr "train probability: "
-            -- batch <- withPhi =<< liftIO (map fromSent <$> trainData)
-            batch <- withPhi (map fromSent trainData)
-            liftIO . print . F.logFromLogFloat . product $ map (uncurry CRF.probability) batch
+            liftIO . print =<< dataProb trainData
+            liftIO $ putStr "dev probability: "
+            liftIO . print =<< dataProb devData
 
   -- gradient computation
   let computeGradient grad batch0 = do
@@ -311,4 +325,4 @@ train sgdArgsT trainData = do -- evalData = do
         dataSet
         paraMap
 
-  return ()
+  return paraMap

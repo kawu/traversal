@@ -7,8 +7,11 @@
 
 module NLP.Departage.CRF
 (
+-- * Types
+  Prob
+
 -- * CRF
-  inside
+, inside
 , outside
 , normFactor
 , marginals
