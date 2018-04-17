@@ -147,9 +147,11 @@ data Feat
 
 -- | Create a CRF training element.
 mkElem
-  :: AH.DepTree MWE Cupt.Token
+  -- :: AH.DepTree MWE Cupt.Token
+  :: AH.EncHype MWE Cupt.Token
   -> CRF.Elem IO (Map.RefMap IO) Feat F.LogFloat
-mkElem depTree =
+-- mkElem depTree =
+mkElem encoded =
 
   CRF.Elem
   { CRF.elemHype = hype
@@ -165,7 +167,7 @@ mkElem depTree =
 
   where
 
-    encoded = AH.encodeTree depTree
+    -- encoded = AH.encodeTree depTree
     hype =  AH.encHype encoded
 
     mkBinary arcHead arcTail
@@ -245,7 +247,7 @@ train sgdArgsT trainData devData = do
         / fromIntegral trainSize
 
   -- transforming data to the CRF form
-  let fromSent = mkElem
+  let fromSent = mkElem . AH.encodeTree
 
   -- enrich the dataset elements with potential functions, based on the current
   -- parameter values (and using `defaultPotential`)
@@ -326,3 +328,27 @@ train sgdArgsT trainData devData = do
         paraMap
 
   return paraMap
+
+
+-- | Tag the dependency tree given the model parameters.
+--
+-- NOTE: the input tree may have some MWE annotations. These will be ignored and
+-- replaced by model-based annotations.
+tagOne
+  :: ParaMap
+  -> AH.DepTree MWE Cupt.Token
+  -> Mame.Mame (Map.RefMap IO) Feat F.LogFloat IO (AH.DepTree MWE Cupt.Token)
+tagOne paraMap depTree = do
+  let encTree = AH.encodeTree depTree
+      crfElem = mkElem encTree
+  -- START: computing arc potentials (UNSAFELY?)
+  paraPure <- liftIO $ Map.unsafeFreeze paraMap
+  let crf x = F.logToLogFloat $ case paraPure x of
+        Nothing -> 0
+        Just v  -> v
+  phi <- CRF.defaultPotential crf (CRF.elemHype crfElem) (CRF.elemFeat crfElem)
+  -- END: computing arc potentials
+  let (prob, _) = CRF.marginals phi (AH.encHype encTree)
+      depTree' = AH.decodeTree encTree prob
+  return depTree'
+

@@ -204,31 +204,64 @@ normFactor hype ins = sum $ do
 
 -- | Compute marginal probabilities of the individual arcs given the potential
 -- function.
-marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
-marginals phi hype
-  = margs
---   | not (zx `almostEq` zx') = trace warning margs
---   | otherwise = margs
+marginals :: Flo v => Phi Arc v -> Hype -> (Prob Node v, Prob Arc v)
+marginals phi hype =
+  (nodeMarg, arcMarg)
   where
-    margs = \arc ->
+    nodeMarg = \node ->
+      let
+        prob = insNode node * outNode node / zx
+      in
+        if prob > 1.0 + eps
+        then error . ("node marginal > 1: " ++ ) $ show
+             ( node
+             , toDouble $ insNode node
+             , toDouble $ outNode node
+             , toDouble zx )
+        else prob
+    arcMarg = \arc ->
       let
         prob = insArc arc * outArc arc / zx
       in
         if prob > 1.0 + eps
---         then prob
-        then error . ("marginals: " ++ ) $ show
+        then error . ("arc marginal > 1: " ++ ) $ show
              ( arc
              , toDouble $ insArc arc
              , toDouble $ outArc arc
              , toDouble zx )
         else prob
---     warning =
---       "[marginals] normalization factors differ significantly: "
---       ++ show (toLogDouble zx, toLogDouble zx')
     (insNode, insArc) = inside hype phi
     (outNode, outArc) = outside hype insNode insArc
     zx  = normFactor  hype insNode
---     zx' = normFactor' hype insNode outNode
+
+
+-- -- | Compute marginal probabilities of the individual arcs given the potential
+-- -- function.
+-- marginals :: Flo v => Phi Arc v -> Hype -> Prob Arc v
+-- marginals phi hype
+--   = margs
+-- --   | not (zx `almostEq` zx') = trace warning margs
+-- --   | otherwise = margs
+--   where
+--     margs = \arc ->
+--       let
+--         prob = insArc arc * outArc arc / zx
+--       in
+--         if prob > 1.0 + eps
+-- --         then prob
+--         then error . ("marginals: " ++ ) $ show
+--              ( arc
+--              , toDouble $ insArc arc
+--              , toDouble $ outArc arc
+--              , toDouble zx )
+--         else prob
+-- --     warning =
+-- --       "[marginals] normalization factors differ significantly: "
+-- --       ++ show (toLogDouble zx, toLogDouble zx')
+--     (insNode, insArc) = inside hype phi
+--     (outNode, outArc) = outside hype insNode insArc
+--     zx  = normFactor  hype insNode
+-- --     zx' = normFactor' hype insNode outNode
 
 
 -- | Expected number of occurrences of the individual features.
@@ -340,7 +373,7 @@ localGradOn elems Grad{..} = do
     -- the actual counts are computed based on priors
     expected elemHype elemFeat elemProb posGrad
     -- to compute expectation, we use posterior marginals instead
-    let elemMarg = marginals elemPhi elemHype
+    let (_, elemMarg) = marginals elemPhi elemHype
     expected elemHype elemFeat elemMarg negGrad
 --   liftIO $ putStrLn "# POS GRAD"
 --   lift $ do
