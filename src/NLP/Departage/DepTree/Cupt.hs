@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 
 -- | Support for the Cupt format -- see http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018&subpage=CONF_45_Format_specification.
@@ -8,8 +9,8 @@ module NLP.Departage.DepTree.Cupt
   (
     -- * Types
     Sent
-  , Token(..)
-  , TokID
+  , Token (..)
+  , TokID (..)
   , MweID
   , MweTyp
   , chosen
@@ -18,6 +19,11 @@ module NLP.Departage.DepTree.Cupt
   , readCupt
   , parseCupt
   , parseSent
+
+    -- * Rendering
+  , writeCupt
+  , renderCupt
+  , renderSent
   ) where
 
 
@@ -25,6 +31,11 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text.Lazy as L
 import qualified Data.Text.Lazy.IO as L
 import qualified Data.Text as T
+
+
+-----------------------------------
+-- Types
+-----------------------------------
 
 
 -- | A Cupt element, i.e., a dependency tree with MWE annotations
@@ -61,8 +72,12 @@ data Token = Token
 
 
 -- | Word index, integer starting at 1 for each new sentence; may be a range for
--- multiword tokens; may be a decimal number for empty nodes.
-type TokID = [Int]
+-- multiword tokens; may be a decimal number(??? what did I mean???) for empty
+-- nodes.
+data TokID
+  = TokID Int
+  | TokIDRange Int Int
+  deriving (Show, Eq, Ord)
 
 
 -- | Sentence-local MWE ID.
@@ -71,6 +86,11 @@ type MweID = Int
 
 -- | MWE type.
 type MweTyp = T.Text
+
+
+-----------------------------------
+-- Parsing
+-----------------------------------
 
 
 -- | Is the token in the chosen segmentation?
@@ -120,7 +140,11 @@ parseToken line =
 
 
 parseTokID :: T.Text -> TokID
-parseTokID = map (read . T.unpack) . T.split (=='-')
+parseTokID txt =
+  case map (read . T.unpack) . T.split (=='-') $ txt of
+    [x] -> TokID x
+    [x, y] -> TokIDRange x y
+    _ -> error "Cupt.parseTokID: invalid token ID"
 
 
 parseFeats :: T.Text -> M.Map T.Text T.Text
@@ -149,3 +173,65 @@ parseMWE txt =
         [mid] -> (read $ T.unpack mid, Nothing)
         [mid, mty] -> (read $ T.unpack mid, Just mty)
         _ -> error "Cupt.parseMWE: ???"
+
+
+-----------------------------------
+-- Rendering
+-----------------------------------
+
+
+writeCupt :: [Sent] -> FilePath -> IO ()
+writeCupt xs filePath = L.writeFile filePath (renderCupt xs)
+
+
+renderCupt :: [Sent] -> L.Text
+renderCupt = L.intercalate "\n\n" . map renderSent
+
+
+renderSent :: Sent -> L.Text
+renderSent = L.unlines . map renderToken
+
+
+renderToken :: Token -> L.Text
+renderToken Token{..} =
+  L.intercalate "\t"
+  [ renderTokID tokID
+  , L.fromStrict orth
+  , L.fromStrict lemma
+  , L.fromStrict upos
+  , L.fromStrict xpos
+  , renderFeats feats
+  , renderTokID dephead
+  , L.fromStrict deprel
+  , L.fromStrict deps
+  , L.fromStrict misc
+  , renderMWE mwe
+  ]
+
+
+renderTokID :: TokID -> L.Text
+renderTokID tid =
+  case tid of
+    TokID x ->
+      psh x
+    TokIDRange x y ->
+      L.intercalate "-" [psh x, psh y]
+  where
+    psh = L.pack . show
+
+
+renderFeats :: M.Map T.Text T.Text -> L.Text
+renderFeats = L.pack . show
+
+
+renderMWE :: [(MweID, Maybe MweTyp)] -> L.Text
+renderMWE =
+  L.intercalate ";" . map renderMwePart
+  where
+    renderMwePart (mweID, mayTyp) =
+      case mayTyp of
+        Nothing -> renderMweID mweID
+        Just tp -> L.intercalate ":"
+          [ renderMweID mweID
+          , L.fromStrict tp ]
+    renderMweID = L.pack . show

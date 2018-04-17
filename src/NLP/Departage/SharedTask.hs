@@ -1,6 +1,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 
 -- | Solution for the MWE identification shared task.
@@ -9,15 +10,17 @@
 module NLP.Departage.SharedTask
   ( MWE
   , encodeCupt
+  , decodeCupt
   , train
+  , tagFile
   ) where
 
 
 import           Control.Monad (forM)
 import           Control.Monad.IO.Class (liftIO)
 
--- import           Data.Ord (comparing)
-import           Data.Maybe (maybeToList)
+import           Data.Ord (comparing)
+import           Data.Maybe (maybeToList, mapMaybe)
 import qualified Data.List as L
 import qualified Data.Tree as R
 import qualified Data.Map.Strict as M
@@ -62,7 +65,7 @@ type MWE = Bool
 encodeCupt :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
 encodeCupt toks0 =
 
-  case S.toList (childMap M.! [0]) of
+  case S.toList (childMap M.! Cupt.TokID 0) of
     [rootID] -> Just $ go rootID
     _ -> trace "SharedTask.encodeCupt: several roots?" Nothing
 
@@ -94,6 +97,26 @@ encodeCupt toks0 =
 
     -- only segmentation-chosen tokens
     toks = filter Cupt.chosen toks0
+
+
+-- | Decode a Cupt sentence from a dependency tree.
+decodeCupt :: AH.DepTree MWE Cupt.Token -> Cupt.Sent
+decodeCupt =
+  L.sortBy (comparing position) . R.flatten . fmap decodeTok
+  where
+    position tok = case Cupt.tokID tok of
+      Cupt.TokID x -> (x, -1)
+      Cupt.TokIDRange x y -> (x, x - y)
+    decodeTok (prob, tok) =
+      case M.lookup True (P.unProb prob) of
+        Just p  ->
+          if p > 0.5
+          then tok {Cupt.mwe = [(1, Just . T.pack $ "MWE:" ++ show p)]}
+          else tok {Cupt.mwe = []}
+        Nothing -> tok {Cupt.mwe = []}
+--       case M.lookupMax (P.unProb prob) of
+--         Just (True, _) -> tok {Cupt.mwe = [(0, Just "MWE")]}
+--         _ -> tok {Cupt.mwe = []}
 
 
 ----------------------------------------------
@@ -352,3 +375,28 @@ tagOne paraMap depTree = do
       depTree' = AH.decodeTree encTree prob
   return depTree'
 
+
+-- | Tag several dependency trees (using `tagOne`).
+tagMany
+  :: ParaMap
+  -> [AH.DepTree MWE Cupt.Token]
+  -> IO [AH.DepTree MWE Cupt.Token]
+tagMany paraMap depTrees = do
+  let makeBuff = Mame.Make
+        { Mame.mkValueBuffer = Map.newRefMap M.empty
+        , Mame.mkDoubleBuffer = Map.newRefMap M.empty
+        }
+  Mame.runMame makeBuff $ do
+    mapM (tagOne paraMap) depTrees
+
+
+-- | High-level tagging function.
+tagFile
+  :: ParaMap
+  -> FilePath -- ^ Input file
+  -> FilePath -- ^ Output file
+  -> IO ()
+tagFile paraMap inpFile outFile = do
+  xs <- mapMaybe encodeCupt <$> Cupt.readCupt inpFile
+  ys <- tagMany paraMap xs
+  Cupt.writeCupt (map decodeCupt ys) outFile
