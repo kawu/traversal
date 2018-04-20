@@ -9,6 +9,7 @@
 
 module NLP.Departage.SharedTask
   ( MWE
+  , ParaMap
   , encodeCupt
   , decodeCupt
   , encodeTypeAmbiguity
@@ -23,6 +24,8 @@ import           Control.Monad (forM, guard)
 import           Control.Monad.IO.Class (liftIO)
 -- import qualified Control.Monad.State.Strict as State
 -- import qualified Pipes as Pipes
+
+import           System.IO (hSetBuffering, stdout, BufferMode (..))
 
 import           Data.Ord (comparing)
 import           Data.Maybe (listToMaybe, maybeToList, mapMaybe)
@@ -45,6 +48,8 @@ import qualified NLP.Departage.CRF.SGD as SGD
 import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.CRF.Mame as Mame
+
+import qualified NLP.Departage.FeatConfig as Cfg
 
 import Debug.Trace (trace)
 
@@ -70,7 +75,8 @@ type MWE = Bool
 encodeCupt :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
 encodeCupt toks0 =
 
-  case S.toList (childMap M.! Cupt.TokID 0) of
+  -- case S.toList (childMap M.! Cupt.TokID 0) of
+  case S.toList (childMap M.! Cupt.rootParID) of
     [rootID] -> Just $ go rootID
     _ -> trace "SharedTask.encodeCupt: several roots?" Nothing
 
@@ -191,68 +197,137 @@ retrieveTypes' paraMapRef = do
   return . S.fromList $ do
     (para, _val) <- M.toList paraMap
     Just tag <- case para of
-        ParentFeat{..} -> [parentTag, currTag]
-        SisterFeat{..} -> [prevTag, currTag]
-        Unary{..} -> [currTag]
+        ParentOrth{..} -> [parentTag, currTag]
+        ParentLemma{..} -> [parentTag, currTag]
+        SisterOrth{..} -> [prevTag, currTag]
+        SisterLemma{..} -> [prevTag, currTag]
+        UnaryOrth{..} -> [currTag]
+        UnaryLemma{..} -> [currTag]
     return tag
 
 
 ----------------------------------------------
--- Features, training
+-- Features
 ----------------------------------------------
-
-
--- -- | Type of the binary feature -- does it correspond to the parent, or the
--- -- sister node?
--- data BinType
---   = Parent
---   | Sister
---   deriving (Show, Eq, Ord)
 
 
 -- | CRF feature type. TODO: somehow add info about dependency labels.
 data Feat mwe
-  = ParentFeat
+  = ParentOrth
     { parentTag :: mwe
     , currTag :: mwe
     , parentOrth :: T.Text
     , currOrth :: T.Text
     }
-  | SisterFeat
+  | ParentLemma
+    { parentTag :: mwe
+    , currTag :: mwe
+    , parentLemma :: T.Text
+    , currLemma :: T.Text
+    }
+  | SisterOrth
     { prevTag :: mwe
     , currTag :: mwe
     , prevOrth :: T.Text
     , currOrth :: T.Text
     }
---   | Binary1
---     { prevTag :: AH.Label MWE
---     , currTag :: AH.Label MWE
---     , prevOrth :: T.Text
---     , binType :: BinType
---     }
---   | Binary2
---     { prevTag :: AH.Label MWE
---     , currTag :: AH.Label MWE
---     , currOrth :: T.Text
---     , binType :: BinType
---     }
-  | Unary
+  | SisterLemma
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevLemma :: T.Text
+    , currLemma :: T.Text
+    }
+  | UnaryOrth
     { currTag :: mwe
     , currOrth :: T.Text
     }
---   | C
---     { ok :: Bool
---     }
+  | UnaryLemma
+    { currTag :: mwe
+    , currLemma :: T.Text
+    }
   deriving (Read, Show, Eq, Ord)
 
 
--- | Create a CRF training element.
+-- | Collect unary features for a given token/MWE pair.
+collectUnary
+  :: S.Set Cfg.UnaryOption
+  -> (Cupt.Token, mwe)
+  -> [Feat mwe]
+collectUnary options (tok, mwe) =
+  map collect (S.toList options)
+  where
+    collect option = case option of
+      Cfg.UnaryOrth -> UnaryOrth
+        { currTag = mwe
+        , currOrth = Cupt.orth tok
+        }
+      Cfg.UnaryLemma -> UnaryLemma
+        { currTag = mwe
+        , currLemma = Cupt.lemma tok
+        }
+
+
+-- | Collect binary parent features.
+collectParent
+  :: S.Set Cfg.ParentOption
+  -> (Cupt.Token, mwe) -- ^ Parent
+  -> (Cupt.Token, mwe) -- ^ Current
+  -> [Feat mwe]
+collectParent options (parTok, parMwe) (curTok, curMwe) =
+  map collect (S.toList options)
+  where
+    collect option = case option of
+      Cfg.ParentOrth -> ParentOrth
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentOrth = Cupt.orth parTok
+        , currOrth = Cupt.orth curTok
+        }
+      Cfg.ParentLemma -> ParentLemma
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentLemma = Cupt.lemma parTok
+        , currLemma = Cupt.lemma curTok
+        }
+
+
+-- | Collect binary sister features.
+collectSister
+  :: S.Set Cfg.SisterOption
+  -> (Cupt.Token, mwe) -- ^ Sister
+  -> (Cupt.Token, mwe) -- ^ Current
+  -> [Feat mwe]
+collectSister options (sisTok, sisMwe) (curTok, curMwe) =
+  map collect (S.toList options)
+  where
+    collect option = case option of
+      Cfg.SisterOrth -> SisterOrth
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevOrth = Cupt.orth sisTok
+        , currOrth = Cupt.orth curTok
+        }
+      Cfg.SisterLemma -> SisterLemma
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevLemma = Cupt.lemma sisTok
+        , currLemma = Cupt.lemma curTok
+        }
+
+
+----------------------------------------------
+-- CRF element
+----------------------------------------------
+
+
+-- | Create a CRF training/tagging element.
 mkElem
   :: (Ord mwe, Read mwe, Show mwe)
-  => AH.EncHype mwe Cupt.Token
+  => Cfg.FeatConfig
+  -> AH.EncHype mwe Cupt.Token
   -> CRF.Elem IO (Map.RefMap IO) (Feat mwe) F.LogFloat
 -- mkElem depTree =
-mkElem encoded =
+mkElem cfg encoded =
 
   CRF.Elem
   { CRF.elemHype = hype
@@ -272,14 +347,10 @@ mkElem encoded =
     hype =  AH.encHype encoded
 
     mkBinary arcHead arcTail
-      | isSister =
-          [ SisterFeat
-            { currTag = AH.origLabel tailMWE
-            , prevTag = AH.origLabel headMWE
-            , currOrth = Cupt.orth tailTok
-            , prevOrth = Cupt.orth headTok
-            }
-          ]
+      | isSister = collectSister
+          (Cfg.sisterOptions cfg)
+          (headTok, AH.origLabel headMWE)
+          (tailTok, AH.origLabel tailMWE)
       | otherwise = []
       where
         headMWE = AH.encLabel encoded arcHead
@@ -292,31 +363,23 @@ mkElem encoded =
 
     mkUnary arcHead =
       let
-        -- (headMWE, headTok) = AH.nodeLabel encoded arcHead
         headMWE = AH.encLabel encoded arcHead
         headTok = AH.encToken encoded (AH.encNode encoded arcHead)
-        unary = Unary
-          { currTag = AH.origLabel headMWE
-          , currOrth = Cupt.orth headTok
-          }
-        binary = maybeToList $ do
+        unary = collectUnary (Cfg.unaryOptions cfg) (headTok, AH.origLabel headMWE)
+        binary = concat . maybeToList $ do
           parTok <- AH.encParent encoded arcHead
-          parTag <- AH.parentLabel headMWE
-          return $ ParentFeat
-            { parentTag = parTag
-            , currTag = AH.origLabel headMWE
-            , parentOrth = Cupt.orth parTok
-            , currOrth = Cupt.orth headTok
-            }
+          parMwe <- AH.parentLabel headMWE
+          return $ collectParent
+            (Cfg.parentOptions cfg)
+            (parTok, parMwe)
+            (headTok, AH.origLabel headMWE)
       in
-        unary : binary
+        unary ++ binary
 
---     mkCheat arcHead arcTails =
---       let
---         isOK (mwe, tok) = AH.origLabel mwe /= (Cupt.mwe tok == [])
---       in
---         [ C . all isOK $ map (AH.nodeLabel encoded) (arcHead:arcTails)
---         ]
+
+----------------------------------------------
+-- Training
+----------------------------------------------
 
 
 -- | A particular CRF model (IO embedded parameter map).
@@ -326,11 +389,13 @@ type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
 -- | Train disambiguation module.
 train
   :: (Ord mwe, Read mwe, Show mwe)
-  => SGD.SgdArgs                  -- ^ SGD configuration
+  => Cfg.FeatConfig
+  -> SGD.SgdArgs                  -- ^ SGD configuration
   -> [AH.DepTree mwe Cupt.Token]  -- ^ Training data
   -> [AH.DepTree mwe Cupt.Token]  -- ^ Development data
   -> IO (ParaMap mwe)
-train sgdArgsT trainData devData = do
+train cfg sgdArgsT trainData devData = do
+  hSetBuffering stdout NoBuffering
 
   -- parameter map
   paraMap <- Map.newRefMap M.empty
@@ -349,7 +414,7 @@ train sgdArgsT trainData devData = do
         / fromIntegral trainSize
 
   -- transforming data to the CRF form
-  let fromSent = mkElem . AH.encodeTree
+  let fromSent = mkElem cfg . AH.encodeTree
 
   -- enrich the dataset elements with potential functions, based on the current
   -- parameter values (and using `defaultPotential`)
@@ -438,12 +503,13 @@ train sgdArgsT trainData devData = do
 -- replaced by model-based annotations.
 tagOne
   :: (Ord mwe, Read mwe, Show mwe)
-  => ParaMap mwe
+  => Cfg.FeatConfig
+  -> ParaMap mwe
   -> AH.DepTree mwe Cupt.Token
   -> Mame.Mame (Map.RefMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
-tagOne paraMap depTree = do
+tagOne cfg paraMap depTree = do
   let encTree = AH.encodeTree depTree
-      crfElem = mkElem encTree
+      crfElem = mkElem cfg encTree
   -- START: computing arc potentials (UNSAFELY?)
   paraPure <- liftIO $ Map.unsafeFreeze paraMap
   let crf x = F.logToLogFloat $ case paraPure x of
@@ -459,16 +525,17 @@ tagOne paraMap depTree = do
 -- | Tag several dependency trees (using `tagOne`).
 tagMany
   :: (Ord mwe, Read mwe, Show mwe)
-  => ParaMap mwe
+  => Cfg.FeatConfig
+  -> ParaMap mwe
   -> [AH.DepTree mwe Cupt.Token]
   -> IO [AH.DepTree mwe Cupt.Token]
-tagMany paraMap depTrees = do
+tagMany cfg paraMap depTrees = do
   let makeBuff = Mame.Make
         { Mame.mkValueBuffer = Map.newRefMap M.empty
         , Mame.mkDoubleBuffer = Map.newRefMap M.empty
         }
   Mame.runMame makeBuff $ do
-    mapM (tagOne paraMap) depTrees
+    mapM (tagOne cfg paraMap) depTrees
 
 
 -- -- | High-level tagging function.
@@ -486,13 +553,14 @@ tagMany paraMap depTrees = do
 -- | High-level tagging function.
 tagFile
   :: S.Set Cupt.MweTyp
+  -> Cfg.FeatConfig
   -> ParaMap MWE
   -> ParaMap (Maybe Cupt.MweTyp)
   -> FilePath -- ^ Input file
   -> FilePath -- ^ Output file
   -> IO ()
-tagFile typSet paraMap paraMap' inpFile outFile = do
+tagFile typSet cfg paraMap paraMap' inpFile outFile = do
   xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
-  ys <- map (encodeTypeAmbiguity typSet) <$> tagMany paraMap xs
-  zs <- tagMany paraMap' ys
+  ys <- map (encodeTypeAmbiguity typSet) <$> tagMany cfg paraMap xs
+  zs <- tagMany cfg paraMap' ys
   Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile

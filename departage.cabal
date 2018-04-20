@@ -56,6 +56,8 @@ library
       , NLP.Departage.CRF.SGD.Dataset
       , NLP.Departage.Prob
       , NLP.Departage.SharedTask
+      , NLP.Departage.FeatConfig
+      , NLP.Departage.Model
 
     -- other-modules:
 

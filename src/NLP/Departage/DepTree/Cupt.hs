@@ -30,6 +30,7 @@ module NLP.Departage.DepTree.Cupt
   , renderSent
 
     -- * Conversion
+  , rootParID
   , decorate
   , abstract
   ) where
@@ -261,9 +262,32 @@ renderMWE =
 -----------------------------------
 
 
+-- | An artificial root token.
+root :: Token
+root = Token
+  { tokID = TokID 0
+  , orth = ""
+  , lemma = ""
+  , upos = ""
+  , xpos = ""
+  , feats = M.empty
+  , dephead = rootParID
+  , deprel = ""
+  , deps = ""
+  , misc = ""
+  , mwe = []
+  }
+
+
+-- | ID to refer to the parent of the artificial root node.
+rootParID :: TokID
+rootParID = TokID (-1)
+
+
+-- | Decorate all MWE instances with their types and add the artificial root node.
 decorate :: MaySent -> Sent
 decorate =
-  snd . List.mapAccumL update M.empty
+  (root:) . snd . List.mapAccumL update M.empty
   where
     update typMap tok =
       let (typMap', mwe') = List.mapAccumL updateOne typMap (mwe tok)
@@ -274,5 +298,9 @@ decorate =
         Just typ -> (M.insert mweID typ typMap, (mweID, typ))
 
 
+-- | Inverse of `decorate`. TODO: actually, does not work like that yet, but
+-- maybe it's not a problem.
 abstract :: Sent -> MaySent
-abstract = map $ \tok -> tok {mwe = map (second Just) (mwe tok)}
+abstract =
+  let update tok = tok {mwe = map (second Just) (mwe tok)}
+  in  tail . map update

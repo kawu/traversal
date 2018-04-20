@@ -7,9 +7,11 @@ import           Options.Applicative
 import           Data.Maybe (mapMaybe)
 
 import qualified NLP.Departage.CRF.SGD as SGD
-import qualified NLP.Departage.CRF.Map as Map
+-- import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.DepTree.Cupt as Cupt
 import qualified NLP.Departage.SharedTask as Task
+import qualified NLP.Departage.FeatConfig as Cfg
+import qualified NLP.Departage.Model as Model
 
 
 --------------------------------------------------
@@ -19,20 +21,20 @@ import qualified NLP.Departage.SharedTask as Task
 
 data Command
     = Train
-      { trainPath :: FilePath
+      { configPath :: FilePath
+        -- ^ Feature configuration path
+      , trainPath :: FilePath
         -- ^ Train dataset
       , devPath :: Maybe FilePath
         -- ^ Dev dataset (optional)
-      , outPathBasic :: Maybe FilePath
-        -- ^ The path to store the basic model (optional)
-      , outPathMWE :: Maybe FilePath
-        -- ^ The path to store the MWE model (optional)
+      , modelDirMay :: Maybe FilePath
+        -- ^ Directory path to store the model (optional)
       }
     | Tag
-      { basicPath :: FilePath
-        -- ^ Basic model params
-      , mwePath :: FilePath
-        -- ^ MWE model params
+      { configPath :: FilePath
+        -- ^ Feature configuration path
+      , modelDir :: FilePath
+        -- ^ Model directory
       , inpPath :: FilePath
         -- ^ Dataset to tag
       , outPath :: FilePath
@@ -48,6 +50,12 @@ data Command
 trainOptions :: Parser Command
 trainOptions = Train
   <$> strOption
+        ( metavar "FEAT-CONFIG"
+       <> long "feat"
+       <> short 'f'
+       <> help "Feature configuration file"
+        )
+  <*> strOption
         ( metavar "TRAIN"
        <> long "train"
        <> short 't'
@@ -60,32 +68,26 @@ trainOptions = Train
        <> help "Development dataset"
         )
   <*> (optional . strOption)
-        ( metavar "OUTPUT-BASIC"
-       <> long "out-basic"
-       <> short 'b'
-       <> help "Output basic model"
-        )
-  <*> (optional . strOption)
-        ( metavar "OUTPUT-MWE"
-       <> long "out-mwe"
-       <> short 'm'
-       <> help "Output MWE model"
+        ( metavar "OUTPUT-MODEL-DIR"
+       <> long "out"
+       <> short 'o'
+       <> help "Output model directory"
         )
 
 
 tagOptions :: Parser Command
 tagOptions = Tag
   <$> strOption
-        ( metavar "BASIC"
-       <> long "basic"
-       <> short 'b'
-       <> help "Basic model file"
+        ( metavar "FEAT-CONFIG"
+       <> long "feat"
+       <> short 'f'
+       <> help "Feature configuration file"
         )
   <*> strOption
-        ( metavar "MWE"
-       <> long "mwe"
+        ( metavar "MODEL-DIR"
+       <> long "model"
        <> short 'm'
-       <> help "MWE model file"
+       <> help "Model directory"
         )
   <*> strOption
         ( metavar "INPUT"
@@ -131,6 +133,7 @@ run cmd =
   case cmd of
 
     Train{..} -> do
+      featCfg <- Cfg.loadConfig configPath
 
       putStrLn "# Basic model"
       let readData = fmap (mapMaybe $ Task.encodeCupt . Cupt.decorate) . Cupt.readCupt
@@ -138,10 +141,10 @@ run cmd =
       devData   <- case devPath of
         Nothing -> return []
         Just path -> readData path
-      paraMap <- Task.train sgdCfg trainData devData
-      case outPathBasic of
-        Just path -> Map.save keyEnc paraMap path
-        Nothing -> return ()
+      paraMap <- Task.train featCfg sgdCfg trainData devData
+--       case outPathBasic of
+--         Just path -> Map.save keyEnc paraMap path
+--         Nothing -> return ()
 
       putStrLn "# MWE identification model"
       typSet <- Task.retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
@@ -155,24 +158,37 @@ run cmd =
       devDataMWE <- case devPath of
         Nothing -> return []
         Just path -> readDataMWE path
-      paraMapMWE <- Task.train sgdCfg trainDataMWE devDataMWE
-      case outPathMWE of
-        Just path -> Map.save keyEnc paraMapMWE path
+      paraMapMWE <- Task.train featCfg sgdCfg trainDataMWE devDataMWE
+--       case outPathMWE of
+--         Just path -> Map.save keyEnc paraMapMWE path
+--         Nothing -> return ()
+
+      let model = Model.Model
+            { Model.paraMapBase = paraMap
+            , Model.paraMapMwe = paraMapMWE
+            , Model.mweTypSet = typSet
+            }
+      case modelDirMay of
+        Just path -> Model.save model path
         Nothing -> return ()
 
     Tag{..} -> do
-      paraMap <- Map.load keyEnc basicPath
-      paraMapMWE <- Map.load keyEnc mwePath
-      typSet <- Task.retrieveTypes' paraMapMWE
-      putStr "# MWE types: " >> print typSet
-      Task.tagFile typSet paraMap paraMapMWE inpPath outPath
+      featCfg <- Cfg.loadConfig configPath
+      -- paraMap <- Map.load keyEnc basicPath
+      -- paraMapMWE <- Map.load keyEnc mwePath
+      model <- Model.load modelDir
+      -- typSet <- Task.retrieveTypes' paraMapMWE
+      putStr "# MWE types: " >> print (Model.mweTypSet model)
+      Task.tagFile
+        (Model.mweTypSet model)
+        featCfg
+        -- paraMap
+        (Model.paraMapBase model)
+        -- paraMapMWE
+        (Model.paraMapMwe model)
+        inpPath outPath
 
   where
-
-    keyEnc = Map.Encoding
-      { Map.toStr = show
-      , Map.fromStr = read
-      }
 
     sgdCfg = SGD.sgdArgsDefault
       { SGD.iterNum=20
