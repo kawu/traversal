@@ -13,6 +13,7 @@ module NLP.Departage.CRF.Map
 
 -- * Maps
 , Map (..)
+, Encoding (..)
 , RefMap (..)
 , newRefMap
 
@@ -21,10 +22,14 @@ module NLP.Departage.CRF.Map
 ) where
 
 
+-- import           Control.Monad (forM_)
+import           Control.Monad.IO.Class (liftIO)
 import           Control.Monad.Primitive (PrimMonad)
 import           Control.Monad.Trans.Class (lift)
 import qualified Control.Monad.State.Strict as State
 
+import           Data.Ord (comparing)
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Data.Map.Merge.Strict as MM
 
@@ -46,16 +51,20 @@ class (Ord a, Fractional a) => Flo a where
   toDouble :: a -> Double
   -- | To a double (in log domain)
   toLogDouble :: a -> Double
+  -- | From a double (in normal domain)
+  fromDouble :: Double -> a
 
 instance Flo Double where
   power = (**)
   toDouble = id
   toLogDouble = log
+  fromDouble = id
 
 instance Flo F.LogFloat where
   power x = F.pow x . toDouble
   toDouble = F.fromLogFloat
   toLogDouble = F.logFromLogFloat
+  fromDouble = F.logFloat
 
 
 ------------------------------------------------------------------
@@ -81,7 +90,7 @@ instance Flo F.LogFloat where
 -- so we can plug different implementations (regular maps, hash-based maps,
 -- arrays, etc.).
 class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v where
-  {-# MINIMAL modify, mergeWith, toList #-}
+  {-# MINIMAL modify, mergeWith, toList, save, load #-}
 
 --   -- | Domain descriptor, which allows to create new maps
 --   type Dom k :: *
@@ -131,6 +140,18 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   unsafeFreeze :: map k v -> prim (k -> Maybe v)
   unsafeFreeze = freeze
 
+  -- | Save the map in a file
+  save :: Encoding k -> map k v -> FilePath -> prim ()
+
+  -- | Load the map from the file
+  load :: Encoding k -> FilePath -> prim (map k v)
+
+
+-- | Encoding from and to a string.
+data Encoding a = Encoding
+  { toStr :: a -> String
+  , fromStr :: String -> a
+  }
 
 
 -- -- | An extention of `Map` which allows to enumerate the keys in the map.
@@ -188,3 +209,20 @@ instance (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) =>
   freeze RefMap{..} = do
     m <- Ref.readPrimRef unRefMap
     return $ \x -> M.lookup x m
+
+  save Encoding{..} RefMap{..} filePath = do
+    m <- Ref.readPrimRef unRefMap
+    liftIO . writeFile filePath . unlines $ do
+      (key, val) <- reverse . L.sortBy (comparing snd) $ M.toList m
+      return $ concat
+        [ show $ toDouble val
+        , "\t"
+        , toStr key ]
+
+  load Encoding{..} filePath = do
+    contents <- liftIO $ readFile filePath
+    let m = M.fromList $ do
+          line <- lines contents
+          let (left, right) = L.break (=='\t') line
+          return (fromStr right, fromDouble $ read left)
+    newRefMap m

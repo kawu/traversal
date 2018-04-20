@@ -8,8 +8,12 @@
 module NLP.Departage.DepTree.Cupt
   (
     -- * Types
-    Sent
-  , Token (..)
+    GenSent
+  , GenToken (..)
+  , MaySent
+  , MayToken
+  , Sent
+  , Token
   , TokID (..)
   , MweID
   , MweTyp
@@ -24,10 +28,17 @@ module NLP.Departage.DepTree.Cupt
   , writeCupt
   , renderCupt
   , renderSent
+
+    -- * Conversion
+  , decorate
+  , abstract
   ) where
 
 
+import           Control.Arrow (second)
+
 import qualified Data.Map.Strict as M
+import qualified Data.List as List
 import qualified Data.Text.Lazy as L
 import qualified Data.Text.Lazy.IO as L
 import qualified Data.Text as T
@@ -38,12 +49,19 @@ import qualified Data.Text as T
 -----------------------------------
 
 
+-- | Concrete types.
+type MaySent = GenSent (Maybe MweTyp)
+type MayToken = GenToken (Maybe MweTyp)
+type Sent = GenSent MweTyp
+type Token = GenToken MweTyp
+
+
 -- | A Cupt element, i.e., a dependency tree with MWE annotations
-type Sent = [Token]
+type GenSent mwe = [GenToken mwe]
 
 
 -- | See description of the CoNLL-U format: http://universaldependencies.org/format.html
-data Token = Token
+data GenToken mwe = Token
   { tokID :: TokID
     -- ^ Word index, integer starting at 1 for each new sentence; may be a range
     -- for multiword tokens; may be a decimal number for empty nodes.
@@ -64,7 +82,8 @@ data Token = Token
     -- ^ Enhanced dependency graph in the form of a list of head-deprel pairs.
   , misc :: T.Text
     -- ^ Any other annotation. It does not seem to be used in Cupt, though?
-  , mwe :: [(MweID, Maybe MweTyp)]
+  -- mwe :: [(MweID, Maybe MweTyp)]
+  , mwe :: [(MweID, mwe)]
     -- ^ MWE-related annotation. It might be a list, i.e., the token can be a
     -- part of several MWEs. Note that only the first occurrence of an MWE is
     -- supplied with the `MweTyp`e.
@@ -94,17 +113,17 @@ type MweTyp = T.Text
 
 
 -- | Is the token in the chosen segmentation?
-chosen :: Token -> Bool
+chosen :: GenToken mwe -> Bool
 chosen tok = upos tok /= "_"
 
 
 -- | Read an entire Cupt file.
-readCupt :: FilePath -> IO [Sent]
+readCupt :: FilePath -> IO [MaySent]
 readCupt = fmap parseCupt . L.readFile
 
 
 -- | Parse an entire Cupt file.
-parseCupt :: L.Text -> [Sent]
+parseCupt :: L.Text -> [MaySent]
 parseCupt
   = map parseSent
   . filter (not . L.null)
@@ -113,14 +132,14 @@ parseCupt
 
 -- | Parse a given textual representation of a sentence. It can be assumed to
 -- contain no empty lines, but it can contain comments.
-parseSent :: L.Text -> Sent
+parseSent :: L.Text -> MaySent
 parseSent
   = map (parseToken . L.toStrict)
   . filter (not . L.isPrefixOf "#")
   . L.lines
 
 
-parseToken :: T.Text -> Token
+parseToken :: T.Text -> MayToken
 parseToken line =
   case T.splitOn "\t" line of
     [id', orth', lemma', upos', xpos', feats', head', deprel', deps', misc', mwe'] -> Token
@@ -180,19 +199,19 @@ parseMWE txt =
 -----------------------------------
 
 
-writeCupt :: [Sent] -> FilePath -> IO ()
+writeCupt :: [MaySent] -> FilePath -> IO ()
 writeCupt xs filePath = L.writeFile filePath (renderCupt xs)
 
 
-renderCupt :: [Sent] -> L.Text
+renderCupt :: [MaySent] -> L.Text
 renderCupt = L.intercalate "\n\n" . map renderSent
 
 
-renderSent :: Sent -> L.Text
+renderSent :: MaySent -> L.Text
 renderSent = L.unlines . map renderToken
 
 
-renderToken :: Token -> L.Text
+renderToken :: MayToken -> L.Text
 renderToken Token{..} =
   L.intercalate "\t"
   [ renderTokID tokID
@@ -235,3 +254,25 @@ renderMWE =
           [ renderMweID mweID
           , L.fromStrict tp ]
     renderMweID = L.pack . show
+
+
+-----------------------------------
+-- Conversion
+-----------------------------------
+
+
+decorate :: MaySent -> Sent
+decorate =
+  snd . List.mapAccumL update M.empty
+  where
+    update typMap tok =
+      let (typMap', mwe') = List.mapAccumL updateOne typMap (mwe tok)
+      in  (typMap', tok {mwe=mwe'})
+    updateOne typMap (mweID, mweTyp) =
+      case mweTyp of
+        Nothing  -> (typMap, (mweID, typMap M.! mweID))
+        Just typ -> (M.insert mweID typ typMap, (mweID, typ))
+
+
+abstract :: Sent -> MaySent
+abstract = map $ \tok -> tok {mwe = map (second Just) (mwe tok)}

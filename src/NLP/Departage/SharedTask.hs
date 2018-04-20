@@ -11,16 +11,21 @@ module NLP.Departage.SharedTask
   ( MWE
   , encodeCupt
   , decodeCupt
+  , encodeTypeAmbiguity
+  , retrieveTypes
+  , retrieveTypes'
   , train
   , tagFile
   ) where
 
 
-import           Control.Monad (forM)
+import           Control.Monad (forM, guard)
 import           Control.Monad.IO.Class (liftIO)
+-- import qualified Control.Monad.State.Strict as State
+-- import qualified Pipes as Pipes
 
 import           Data.Ord (comparing)
-import           Data.Maybe (maybeToList, mapMaybe)
+import           Data.Maybe (listToMaybe, maybeToList, mapMaybe)
 import qualified Data.List as L
 import qualified Data.Tree as R
 import qualified Data.Map.Strict as M
@@ -111,12 +116,85 @@ decodeCupt =
       case M.lookup True (P.unProb prob) of
         Just p  ->
           if p > 0.5
-          then tok {Cupt.mwe = [(1, Just . T.pack $ "MWE:" ++ show p)]}
+          then tok {Cupt.mwe = [(1, T.pack $ "MWE:" ++ show p)]}
           else tok {Cupt.mwe = []}
         Nothing -> tok {Cupt.mwe = []}
 --       case M.lookupMax (P.unProb prob) of
 --         Just (True, _) -> tok {Cupt.mwe = [(0, Just "MWE")]}
 --         _ -> tok {Cupt.mwe = []}
+
+
+-- | Decode a Cupt sentence from a dependency tree.
+decodeCupt' :: AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token -> Cupt.Sent
+decodeCupt' =
+  L.sortBy (comparing position) . R.flatten . fmap decodeTok
+  where
+    position tok = case Cupt.tokID tok of
+      Cupt.TokID x -> (x, -1)
+      Cupt.TokIDRange x y -> (x, x - y)
+    decodeTok (prob, tok) =
+      case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
+        Just (Just typ, _) -> tok {Cupt.mwe = [(0, typ)]}
+        _ -> tok {Cupt.mwe = []}
+
+
+----------------------------------------------
+-- Encoding as dependency tree:
+-- MWE-type-preserving version
+----------------------------------------------
+
+
+-- -- | What's the purpose of encoding type ambiguity?
+-- data Purpose
+--   = Parsing  -- ^ For parsing
+--   | Training -- ^ For training
+--   deriving (Show, Eq, Ord)
+
+
+-- | Encode MWE-type ambiguity for nodes marked as (untyped) MWEs (more
+-- precisely, for those nodes for which the the probability of being an MWE is >
+-- 0.5).
+encodeTypeAmbiguity
+--   :: Purpose
+--      -- ^ Inventory of permissible MWE types
+  :: S.Set Cupt.MweTyp
+     -- ^ Inventory of permissible MWE types
+  -> AH.DepTree MWE Cupt.Token
+     -- ^ Dependency tree marked with (untyped) MWEs
+  -> AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token
+     -- ^ Dependency tree ambiguous w.r.t. MWE types
+encodeTypeAmbiguity typSet =
+  fmap encode
+  where
+    encode (prob, tok) = addTok tok $ do
+      p <- M.lookup True (P.unProb prob)
+      guard $ p > 0.5
+      let typNum = fromIntegral . length $ Cupt.mwe tok
+      return $ P.fromList $
+        [(Just typ, 0.0) | typ <- S.toList typSet] ++
+        [(Just typ, 1.0 / typNum) | (_mweID, typ) <- Cupt.mwe tok]
+    addTok tok Nothing     = (P.fromList [(Nothing, 1.0)], tok)
+    addTok tok (Just prob) = (prob, tok)
+
+
+-- | Retrieve the set of types present in the given sentence.
+retrieveTypes :: [Cupt.Sent] -> S.Set Cupt.MweTyp
+retrieveTypes =
+  let retrieve = map snd . Cupt.mwe
+  in  S.fromList . concatMap retrieve . concat
+
+
+-- | A version of `retrieveTypes` which takes a model as input.
+retrieveTypes' :: ParaMap (Maybe Cupt.MweTyp) -> IO (S.Set Cupt.MweTyp)
+retrieveTypes' paraMapRef = do
+  paraMap <- Ref.readPrimRef (Map.unRefMap paraMapRef)
+  return . S.fromList $ do
+    (para, _val) <- M.toList paraMap
+    Just tag <- case para of
+        ParentFeat{..} -> [parentTag, currTag]
+        SisterFeat{..} -> [prevTag, currTag]
+        Unary{..} -> [currTag]
+    return tag
 
 
 ----------------------------------------------
@@ -133,16 +211,16 @@ decodeCupt =
 
 
 -- | CRF feature type. TODO: somehow add info about dependency labels.
-data Feat
+data Feat mwe
   = ParentFeat
-    { parentTag :: MWE
-    , currTag :: MWE
+    { parentTag :: mwe
+    , currTag :: mwe
     , parentOrth :: T.Text
     , currOrth :: T.Text
     }
   | SisterFeat
-    { prevTag :: MWE
-    , currTag :: MWE
+    { prevTag :: mwe
+    , currTag :: mwe
     , prevOrth :: T.Text
     , currOrth :: T.Text
     }
@@ -159,20 +237,20 @@ data Feat
 --     , binType :: BinType
 --     }
   | Unary
-    { currTag :: MWE
+    { currTag :: mwe
     , currOrth :: T.Text
     }
 --   | C
 --     { ok :: Bool
 --     }
-  deriving (Show, Eq, Ord)
+  deriving (Read, Show, Eq, Ord)
 
 
 -- | Create a CRF training element.
 mkElem
-  -- :: AH.DepTree MWE Cupt.Token
-  :: AH.EncHype MWE Cupt.Token
-  -> CRF.Elem IO (Map.RefMap IO) Feat F.LogFloat
+  :: (Ord mwe, Read mwe, Show mwe)
+  => AH.EncHype mwe Cupt.Token
+  -> CRF.Elem IO (Map.RefMap IO) (Feat mwe) F.LogFloat
 -- mkElem depTree =
 mkElem encoded =
 
@@ -242,15 +320,16 @@ mkElem encoded =
 
 
 -- | A particular CRF model (IO embedded parameter map).
-type ParaMap = Map.RefMap IO Feat Double
+type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
 
 
 -- | Train disambiguation module.
 train
-    :: SGD.SgdArgs                  -- ^ SGD configuration
-    -> [AH.DepTree MWE Cupt.Token]  -- ^ Training data
-    -> [AH.DepTree MWE Cupt.Token]  -- ^ Development data
-    -> IO ParaMap
+  :: (Ord mwe, Read mwe, Show mwe)
+  => SGD.SgdArgs                  -- ^ SGD configuration
+  -> [AH.DepTree mwe Cupt.Token]  -- ^ Training data
+  -> [AH.DepTree mwe Cupt.Token]  -- ^ Development data
+  -> IO (ParaMap mwe)
 train sgdArgsT trainData devData = do
 
   -- parameter map
@@ -358,9 +437,10 @@ train sgdArgsT trainData devData = do
 -- NOTE: the input tree may have some MWE annotations. These will be ignored and
 -- replaced by model-based annotations.
 tagOne
-  :: ParaMap
-  -> AH.DepTree MWE Cupt.Token
-  -> Mame.Mame (Map.RefMap IO) Feat F.LogFloat IO (AH.DepTree MWE Cupt.Token)
+  :: (Ord mwe, Read mwe, Show mwe)
+  => ParaMap mwe
+  -> AH.DepTree mwe Cupt.Token
+  -> Mame.Mame (Map.RefMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
 tagOne paraMap depTree = do
   let encTree = AH.encodeTree depTree
       crfElem = mkElem encTree
@@ -378,9 +458,10 @@ tagOne paraMap depTree = do
 
 -- | Tag several dependency trees (using `tagOne`).
 tagMany
-  :: ParaMap
-  -> [AH.DepTree MWE Cupt.Token]
-  -> IO [AH.DepTree MWE Cupt.Token]
+  :: (Ord mwe, Read mwe, Show mwe)
+  => ParaMap mwe
+  -> [AH.DepTree mwe Cupt.Token]
+  -> IO [AH.DepTree mwe Cupt.Token]
 tagMany paraMap depTrees = do
   let makeBuff = Mame.Make
         { Mame.mkValueBuffer = Map.newRefMap M.empty
@@ -390,13 +471,28 @@ tagMany paraMap depTrees = do
     mapM (tagOne paraMap) depTrees
 
 
+-- -- | High-level tagging function.
+-- tagFile
+--   :: (ParaMap MWE)
+--   -> FilePath -- ^ Input file
+--   -> FilePath -- ^ Output file
+--   -> IO ()
+-- tagFile paraMap inpFile outFile = do
+--   xs <- mapMaybe encodeCupt <$> Cupt.readCupt inpFile
+--   ys <- tagMany paraMap xs
+--   Cupt.writeCupt (map decodeCupt ys) outFile
+
+
 -- | High-level tagging function.
 tagFile
-  :: ParaMap
+  :: S.Set Cupt.MweTyp
+  -> ParaMap MWE
+  -> ParaMap (Maybe Cupt.MweTyp)
   -> FilePath -- ^ Input file
   -> FilePath -- ^ Output file
   -> IO ()
-tagFile paraMap inpFile outFile = do
-  xs <- mapMaybe encodeCupt <$> Cupt.readCupt inpFile
-  ys <- tagMany paraMap xs
-  Cupt.writeCupt (map decodeCupt ys) outFile
+tagFile typSet paraMap paraMap' inpFile outFile = do
+  xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
+  ys <- map (encodeTypeAmbiguity typSet) <$> tagMany paraMap xs
+  zs <- tagMany paraMap' ys
+  Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
