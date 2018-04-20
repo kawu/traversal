@@ -14,7 +14,7 @@ module NLP.Departage.SharedTask
   , decodeCupt
   , encodeTypeAmbiguity
   , retrieveTypes
-  , retrieveTypes'
+  -- , retrieveTypes'
   , train
   , tagFile
   ) where
@@ -190,20 +190,20 @@ retrieveTypes =
   in  S.fromList . concatMap retrieve . concat
 
 
--- | A version of `retrieveTypes` which takes a model as input.
-retrieveTypes' :: ParaMap (Maybe Cupt.MweTyp) -> IO (S.Set Cupt.MweTyp)
-retrieveTypes' paraMapRef = do
-  paraMap <- Ref.readPrimRef (Map.unRefMap paraMapRef)
-  return . S.fromList $ do
-    (para, _val) <- M.toList paraMap
-    Just tag <- case para of
-        ParentOrth{..} -> [parentTag, currTag]
-        ParentLemma{..} -> [parentTag, currTag]
-        SisterOrth{..} -> [prevTag, currTag]
-        SisterLemma{..} -> [prevTag, currTag]
-        UnaryOrth{..} -> [currTag]
-        UnaryLemma{..} -> [currTag]
-    return tag
+-- -- | A version of `retrieveTypes` which takes a model as input.
+-- retrieveTypes' :: ParaMap (Maybe Cupt.MweTyp) -> IO (S.Set Cupt.MweTyp)
+-- retrieveTypes' paraMapRef = do
+--   paraMap <- Ref.readPrimRef (Map.unRefMap paraMapRef)
+--   return . S.fromList $ do
+--     (para, _val) <- M.toList paraMap
+--     Just tag <- case para of
+--         ParentOrth{..} -> [parentTag, currTag]
+--         ParentLemma{..} -> [parentTag, currTag]
+--         SisterOrth{..} -> [prevTag, currTag]
+--         SisterLemma{..} -> [prevTag, currTag]
+--         UnaryOrth{..} -> [currTag]
+--         UnaryLemma{..} -> [currTag]
+--     return tag
 
 
 ----------------------------------------------
