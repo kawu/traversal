@@ -1,16 +1,24 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
 
 import           Data.Monoid ((<>))
 import           Options.Applicative
-import           Data.Maybe (mapMaybe)
+-- import           Data.Maybe (mapMaybe)
+import           Data.String (fromString)
+import qualified Data.Text.Lazy.IO as TL
+
+import           System.FilePath (isAbsolute, (</>))
+
+import qualified Dhall as Dhall
 
 import qualified NLP.Departage.CRF.SGD as SGD
 -- import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.DepTree.Cupt as Cupt
 import qualified NLP.Departage.SharedTask as Task
-import qualified NLP.Departage.FeatConfig as Cfg
+-- import qualified NLP.Departage.FeatConfig as Cfg
+import qualified NLP.Departage.Config as Cfg
 import qualified NLP.Departage.Model as Model
 
 
@@ -40,6 +48,7 @@ data Command
       , outPath :: FilePath
         -- ^ Output file
       }
+    | LiftCase
 
 
 --------------------------------------------------
@@ -103,6 +112,10 @@ tagOptions = Tag
         )
 
 
+liftCaseOptions :: Parser Command
+liftCaseOptions = pure LiftCase
+
+
 --------------------------------------------------
 -- Global options
 --------------------------------------------------
@@ -117,6 +130,10 @@ opts = subparser
     <> command "tag"
     (info (helper <*> tagOptions)
       (progDesc "Tag the input file")
+    )
+    <> command "liftcase"
+    (info (helper <*> liftCaseOptions)
+      (progDesc "Lift case markers (stdin -> stdout)")
     )
   )
 
@@ -133,32 +150,38 @@ run cmd =
   case cmd of
 
     Train{..} -> do
-      featCfg <- Cfg.loadConfig configPath
+      -- featCfg <- Cfg.loadConfig configPath
+      let configPath' =
+            if isAbsolute configPath
+            then configPath
+            else "./" </> configPath
+      config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
 
       putStrLn "# Basic model"
-      let readData = fmap (mapMaybe $ Task.encodeCupt . Cupt.decorate) . Cupt.readCupt
+      -- let readData = fmap (mapMaybe $ Task.encodeCupt . Cupt.decorate) . Cupt.readCupt
+      let readData = Task.readDataWith config
       trainData <- readData trainPath
       devData   <- case devPath of
         Nothing -> return []
         Just path -> readData path
-      paraMap <- Task.train featCfg sgdCfg trainData devData
---       case outPathBasic of
---         Just path -> Map.save keyEnc paraMap path
---         Nothing -> return ()
+      paraMap <- Task.train (Cfg.baseFeatConfig config) sgdCfg trainData devData
 
       putStrLn "# MWE identification model"
       typSet <- Task.retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
       let readDataMWE
-            = fmap
-              ( map (Task.encodeTypeAmbiguity typSet)
-                . mapMaybe (Task.encodeCupt . Cupt.decorate)
-              )
-            . Cupt.readCupt
+            = fmap (map (Task.encodeTypeAmbiguity typSet))
+            . Task.readDataWith config
+--       let readDataMWE
+--             = fmap
+--               ( map (Task.encodeTypeAmbiguity typSet)
+--                 . mapMaybe (Task.encodeCupt . Cupt.decorate)
+--               )
+--             . Cupt.readCupt
       trainDataMWE <- readDataMWE trainPath
       devDataMWE <- case devPath of
         Nothing -> return []
         Just path -> readDataMWE path
-      paraMapMWE <- Task.train featCfg sgdCfg trainDataMWE devDataMWE
+      paraMapMWE <- Task.train (Cfg.mweFeatConfig config) sgdCfg trainDataMWE devDataMWE
 --       case outPathMWE of
 --         Just path -> Map.save keyEnc paraMapMWE path
 --         Nothing -> return ()
@@ -173,7 +196,12 @@ run cmd =
         Nothing -> return ()
 
     Tag{..} -> do
-      featCfg <- Cfg.loadConfig configPath
+      -- featCfg <- Cfg.loadConfig configPath
+      let configPath' =
+            if isAbsolute configPath
+            then configPath
+            else "./" </> configPath
+      config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
       -- paraMap <- Map.load keyEnc basicPath
       -- paraMapMWE <- Map.load keyEnc mwePath
       model <- Model.load modelDir
@@ -181,12 +209,17 @@ run cmd =
       putStr "# MWE types: " >> print (Model.mweTypSet model)
       Task.tagFile
         (Model.mweTypSet model)
-        featCfg
+        config
         -- paraMap
         (Model.paraMapBase model)
         -- paraMapMWE
         (Model.paraMapMwe model)
         inpPath outPath
+
+    LiftCase -> do
+      xs <- Cupt.parseCupt <$> TL.getContents
+      let ys = map Task.liftCase xs
+      TL.putStrLn (Cupt.renderCupt ys)
 
   where
 
@@ -198,7 +231,6 @@ run cmd =
       , SGD.gain0=0.1
       , SGD.batchSize=30
       }
-
 
 main :: IO ()
 main =

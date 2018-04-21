@@ -17,6 +17,10 @@ module NLP.Departage.SharedTask
   -- , retrieveTypes'
   , train
   , tagFile
+
+  -- * Utils
+  , liftCase
+  , readDataWith
   ) where
 
 
@@ -50,7 +54,9 @@ import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.CRF.Mame as Mame
 
-import qualified NLP.Departage.FeatConfig as Cfg
+-- import qualified NLP.Departage.FeatConfig as Cfg
+import qualified NLP.Departage.Config as Cfg
+import qualified NLP.Departage.Config.Feat as Cfg
 
 import Debug.Trace (trace)
 
@@ -468,7 +474,7 @@ mkElem cfg encoded =
 
     mkBinary arcHead arcTail
       | isSister = collectSister
-          (Cfg.sisterOptions cfg)
+          (Cfg.unSet $ Cfg.sisterOptions cfg)
           (headTok, AH.origLabel headMWE)
           (tailTok, AH.origLabel tailMWE)
       | otherwise = []
@@ -485,12 +491,12 @@ mkElem cfg encoded =
       let
         headMWE = AH.encLabel encoded arcHead
         headTok = AH.encToken encoded (AH.encNode encoded arcHead)
-        unary = collectUnary (Cfg.unaryOptions cfg) (headTok, AH.origLabel headMWE)
+        unary = collectUnary (Cfg.unSet $ Cfg.unaryOptions cfg) (headTok, AH.origLabel headMWE)
         binary = concat . maybeToList $ do
           parTok <- AH.encParent encoded arcHead
           parMwe <- AH.parentLabel headMWE
           return $ collectParent
-            (Cfg.parentOptions cfg)
+            (Cfg.unSet $ Cfg.parentOptions cfg)
             (parTok, parMwe)
             (headTok, AH.origLabel headMWE)
       in
@@ -585,16 +591,6 @@ train cfg sgdArgsT trainData devData = do
 --           gradMap <- Ref.readPrimRef $ Map.unRefMap grad
 --           print gradMap
 
---   -- SGD parameters
---   let sgdParams = SGD.sgdArgsDefault
---         { SGD.batchSize = batchSize
---         , SGD.iterNum = 10
---         , SGD.regVar = 4
---         , SGD.gain0 = 0.25
---         , SGD.tau = 5
---         , SGD.gamma = 0.9
---         }
-
   -- Buffer creation
   let makeBuff = Mame.Make
         { Mame.mkValueBuffer = Map.newRefMap M.empty
@@ -673,14 +669,77 @@ tagMany cfg paraMap depTrees = do
 -- | High-level tagging function.
 tagFile
   :: S.Set Cupt.MweTyp
-  -> Cfg.FeatConfig
+  -> Cfg.Config
   -> ParaMap MWE
   -> ParaMap (Maybe Cupt.MweTyp)
   -> FilePath -- ^ Input file
   -> FilePath -- ^ Output file
   -> IO ()
-tagFile typSet cfg paraMap paraMap' inpFile outFile = do
-  xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
-  ys <- map (encodeTypeAmbiguity typSet) <$> tagMany cfg paraMap xs
-  zs <- tagMany cfg paraMap' ys
+tagFile typSet config paraMap paraMap' inpFile outFile = do
+  -- xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
+  xs <- readDataWith config inpFile
+  ys <- map (encodeTypeAmbiguity typSet)
+    <$> tagMany (Cfg.baseFeatConfig config) paraMap  xs
+  zs <- tagMany (Cfg.mweFeatConfig  config) paraMap' ys
   Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
+
+
+-- -- | High-level tagging function.
+-- tagFile
+--   :: S.Set Cupt.MweTyp
+--   -> Cfg.FeatConfig
+--   -> ParaMap MWE
+--   -> ParaMap (Maybe Cupt.MweTyp)
+--   -> FilePath -- ^ Input file
+--   -> FilePath -- ^ Output file
+--   -> IO ()
+-- tagFile typSet cfg paraMap paraMap' inpFile outFile = do
+--   xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
+--   ys <- map (encodeTypeAmbiguity typSet) <$> tagMany cfg paraMap xs
+--   zs <- tagMany cfg paraMap' ys
+--   Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
+
+
+----------------------------------------------
+-- Pre-processing
+----------------------------------------------
+
+
+-- | Read Cupt data from a given file.
+readDataWith
+  :: Cfg.Config
+  -> FilePath
+  -> IO [AH.DepTree MWE Cupt.Token]
+readDataWith config
+  = fmap (mapMaybe $ encodeCupt . Cupt.decorate . handleCase)
+  . Cupt.readCupt
+  where
+    handleCase =
+      if Cfg.liftCase config
+      then liftCase
+      else id
+
+
+-- | Lift tokens satisfying the given predicate to a higher level (i.e., they
+-- get attached to their grandparents).
+liftToks
+  :: (Cupt.GenToken mwe -> Bool)
+  -> Cupt.GenSent mwe
+  -> Cupt.GenSent mwe
+liftToks tokPred sent =
+  map liftIt sent
+  where
+    liftIt tok =
+      if tokPred tok
+      then tok {Cupt.dephead = parent (Cupt.dephead tok)}
+      else tok
+    parent tokID = maybe tokID id $ M.lookup tokID parMap
+    parMap = M.fromList $ do
+      tok <- sent
+      return (Cupt.tokID tok, Cupt.dephead tok)
+
+
+-- | Apply `liftToks` over tokens which perform the function of case markers.
+liftCase :: Cupt.GenSent mwe -> Cupt.GenSent mwe
+liftCase = liftToks $ \tok -> Cupt.deprel tok == "case"
+
