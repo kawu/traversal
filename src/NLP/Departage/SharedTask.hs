@@ -55,7 +55,7 @@ import Debug.Trace (trace)
 
 
 ----------------------------------------------
--- MWEs
+-- Basic Types
 ----------------------------------------------
 
 
@@ -225,6 +225,26 @@ data Feat mwe
     , parentLemma :: T.Text
     , currLemma :: T.Text
     }
+  | ParentLemmaParent
+    { parentTag :: mwe
+    , currTag :: mwe
+    , parentLemma :: T.Text
+    }
+  | ParentLemmaCurrent
+    { parentTag :: mwe
+    , currTag :: mwe
+    , currLemma :: T.Text
+    }
+  | ParentTagsOnly
+    { parentTag :: mwe
+    , currTag :: mwe
+    }
+  | ParentTagsAndDepRel
+    { parentTag :: mwe
+    , currTag :: mwe
+    , currRel :: T.Text
+      -- ^ Dependency type of the arc between the node and its parent
+    }
   | SisterOrth
     { prevTag :: mwe
     , currTag :: mwe
@@ -236,6 +256,28 @@ data Feat mwe
     , currTag :: mwe
     , prevLemma :: T.Text
     , currLemma :: T.Text
+    }
+  | SisterLemmaSister
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevLemma :: T.Text
+    }
+  | SisterLemmaCurrent
+    { prevTag :: mwe
+    , currTag :: mwe
+    , currLemma :: T.Text
+    }
+  | SisterTagsOnly
+    { prevTag :: mwe
+    , currTag :: mwe
+    }
+  | SisterTagsAndDepRel
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevRel :: T.Text
+      -- ^ Dependency type of the arc between the sister node and its parent
+    , currRel :: T.Text
+      -- ^ Dependency type of the arc between the current node and its parent
     }
   | UnaryOrth
     { currTag :: mwe
@@ -289,6 +331,25 @@ collectParent options (parTok, parMwe) (curTok, curMwe) =
         , parentLemma = Cupt.lemma parTok
         , currLemma = Cupt.lemma curTok
         }
+      Cfg.ParentLemmaParent -> ParentLemmaParent
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentLemma = Cupt.lemma parTok
+        }
+      Cfg.ParentLemmaCurrent -> ParentLemmaCurrent
+        { parentTag = parMwe
+        , currTag = curMwe
+        , currLemma = Cupt.lemma curTok
+        }
+      Cfg.ParentTagsOnly -> ParentTagsOnly
+        { parentTag = parMwe
+        , currTag = curMwe
+        }
+      Cfg.ParentTagsAndDepRel -> ParentTagsAndDepRel
+        { parentTag = parMwe
+        , currTag = curMwe
+        , currRel = Cupt.deprel curTok
+        }
 
 
 -- | Collect binary sister features.
@@ -312,6 +373,26 @@ collectSister options (sisTok, sisMwe) (curTok, curMwe) =
         , currTag = curMwe
         , prevLemma = Cupt.lemma sisTok
         , currLemma = Cupt.lemma curTok
+        }
+      Cfg.SisterLemmaSister -> SisterLemmaSister
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevLemma = Cupt.lemma sisTok
+        }
+      Cfg.SisterLemmaCurrent -> SisterLemmaCurrent
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , currLemma = Cupt.lemma curTok
+        }
+      Cfg.SisterTagsOnly -> SisterTagsOnly
+        { prevTag = sisMwe
+        , currTag = curMwe
+        }
+      Cfg.SisterTagsAndDepRel -> SisterTagsAndDepRel
+        { prevTag = sisMwe
+        , prevRel = Cupt.deprel sisTok
+        , currTag = curMwe
+        , currRel = Cupt.deprel curTok
         }
 
 

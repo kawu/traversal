@@ -34,6 +34,10 @@ data ParentOption
   = ParentOrth
     -- ^ Standard (orth, mwe) pair for parent and child
   | ParentLemma
+  | ParentLemmaParent
+  | ParentLemmaCurrent
+  | ParentTagsOnly
+  | ParentTagsAndDepRel
   deriving (Read, Show, Eq, Ord)
 
 
@@ -42,6 +46,10 @@ data SisterOption
   = SisterOrth
     -- ^ Standard (orth, mwe) pair for sisters
   | SisterLemma
+  | SisterLemmaSister
+  | SisterLemmaCurrent
+  | SisterTagsOnly
+  | SisterTagsAndDepRel
   deriving (Read, Show, Eq, Ord)
 
 
