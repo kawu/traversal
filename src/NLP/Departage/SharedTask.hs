@@ -20,9 +20,10 @@ module NLP.Departage.SharedTask
   ) where
 
 
+import           Control.Applicative ((<|>))
 import           Control.Monad (forM, guard)
 import           Control.Monad.IO.Class (liftIO)
--- import qualified Control.Monad.State.Strict as State
+import qualified Control.Monad.State.Strict as State
 -- import qualified Pipes as Pipes
 
 import           System.IO (hSetBuffering, stdout, BufferMode (..))
@@ -133,15 +134,53 @@ decodeCupt =
 -- | Decode a Cupt sentence from a dependency tree.
 decodeCupt' :: AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token -> Cupt.Sent
 decodeCupt' =
-  L.sortBy (comparing position) . R.flatten . fmap decodeTok
+  -- L.sortBy (comparing position) . R.flatten . fmap decodeTok
+  L.sortBy (comparing position) . concatMap R.flatten . flip State.evalState 1 . decodeTree
   where
     position tok = case Cupt.tokID tok of
       Cupt.TokID x -> (x, -1)
       Cupt.TokIDRange x y -> (x, x - y)
-    decodeTok (prob, tok) =
+--     decodeTok (prob, tok) =
+--       case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
+--         Just (Just typ, _) -> tok {Cupt.mwe = [(0, typ)]}
+--         _ -> tok {Cupt.mwe = []}
+    decodeTree tree = decode Nothing Nothing [tree]
+    decode _ _ [] = return []
+    decode parent sister (tree : forest) = do
+      let (prob, tok) = R.rootLabel tree
+          subTrees = R.subForest tree
       case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
-        Just (Just typ, _) -> tok {Cupt.mwe = [(0, typ)]}
-        _ -> tok {Cupt.mwe = []}
+        Just (Just typ, _) -> do
+          mwe <- case withPrev parent typ <|> withPrev sister typ of
+            Nothing -> withNewID typ
+            Just x  -> return x
+              -- root' = tok {Cupt.mwe = [(0, typ)]}
+          subTrees' <- decode (Just mwe) Nothing   subTrees
+          forest'   <- decode  parent   (Just mwe) forest
+          let root' = tok {Cupt.mwe = [mwe]}
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+        _ -> do
+          subTrees' <- decode Nothing Nothing subTrees
+          forest'   <- decode parent  Nothing forest
+          let root' = tok {Cupt.mwe = []}
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+    withPrev prev typ = do
+      (prevID, prevTyp) <- prev
+      guard $ prevTyp == typ
+      return (prevID, typ)
+    withNewID typ = do
+      k <- State.get
+      State.put (k+1)
+      return (k, typ)
+
+
+
+-- -- | Add MWE identifiers so that adjacent (in the tree sense) MWEs have the same
+-- -- ID, while non-adjacent MWEs are considered as different instances.
+-- addMweIDsStupid :: Cupt.Sent -> Cupt.Sent
+-- addMweIDsStupid sent =
 
 
 ----------------------------------------------

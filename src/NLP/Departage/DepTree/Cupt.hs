@@ -205,7 +205,7 @@ writeCupt xs filePath = L.writeFile filePath (renderCupt xs)
 
 
 renderCupt :: [MaySent] -> L.Text
-renderCupt = L.intercalate "\n\n" . map renderSent
+renderCupt = L.intercalate "\n" . map renderSent
 
 
 renderSent :: MaySent -> L.Text
@@ -241,12 +241,21 @@ renderTokID tid =
 
 
 renderFeats :: M.Map T.Text T.Text -> L.Text
-renderFeats = L.pack . show
+renderFeats featMap
+  | M.null featMap = "_"
+  | otherwise = L.intercalate "|" . map renderPair $ M.toList featMap
+  where
+    renderPair (att, val) = L.concat
+      [ L.fromStrict att
+      , "="
+      , L.fromStrict val
+      ]
 
 
 renderMWE :: [(MweID, Maybe MweTyp)] -> L.Text
-renderMWE =
-  L.intercalate ";" . map renderMwePart
+renderMWE xs
+  | null xs = "*"
+  | otherwise = L.intercalate ";" . map renderMwePart $ xs
   where
     renderMwePart (mweID, mayTyp) =
       case mayTyp of
