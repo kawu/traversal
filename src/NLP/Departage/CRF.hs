@@ -23,25 +23,25 @@ module NLP.Departage.CRF
 
 -- * Defaults
 , defaultPotential
-, defaultFeat
+-- , defaultFeat
 
 -- * Training
 , Elem(..)
 , gradOn
 
 -- * Tests
-, testHype
-, testFeatBase
-, testSGD
+-- , testHype
+-- , testFeatBase
+-- , testSGD
 ) where
 
 
-import           Control.Monad (forM_, forM)
+import           Control.Monad (forM_)
 import qualified Control.Arrow as Arr
 -- import qualified Control.Monad.ST as ST
 -- import           Control.Monad.ST (ST)
 import           Control.Monad.Trans.Class (lift)
-import           Control.Monad.IO.Class (liftIO)
+-- import           Control.Monad.IO.Class (liftIO)
 -- import qualified Control.Monad.Primitive as Prim
 -- import qualified Control.Monad.State.Strict as State
 
@@ -49,22 +49,21 @@ import           Control.Monad.IO.Class (liftIO)
 -- import qualified Numeric.SGD.Momentum as SGD
 
 import qualified Data.Set as S
-import qualified Data.Map.Strict as M
+-- import qualified Data.Map.Strict as M
 import qualified Data.MemoCombinators as Memo
-import qualified Data.Number.LogFloat as F
-import qualified Data.PrimRef as Ref
+-- import qualified Data.Number.LogFloat as F
+-- import qualified Data.PrimRef as Ref
 
-import qualified Pipes as Pipes
+-- import qualified Pipes as Pipes
 -- import           Streaming.Prelude (Stream, Of)
 
 import qualified NLP.Departage.Hype as H
 import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
 
-import qualified NLP.Departage.CRF.SGD as SGD
-import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
+-- import qualified NLP.Departage.CRF.SGD as SGD
+-- import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
-import           NLP.Departage.CRF.Map
-  (Flo(..), RefMap(..))
+import           NLP.Departage.CRF.Map (Flo(..)) -- , RefMap(..))
 import           NLP.Departage.CRF.Mame (Mame)
 import qualified NLP.Departage.CRF.Mame as Mame
 
@@ -97,36 +96,20 @@ type ExpCRF f v = f -> v
 type Phi a v = a -> v
 
 
--- | Computes the map (`map f v`) of features (`f`) assigned to a given element
--- `a` (e.g. `Arc`), together with the corresponding multiplicities (`v`), and
--- put them in the input map (note that computation is performed in the `prim`
--- monad). The function should not assume that the given map is empty.
-type Feat a prim map f v = a -> map f v -> prim ()
+-- | Computes the stream of features (`f`) assigned to a given element `a` (e.g.
+-- `Arc`), together with the corresponding multiplicities (`v`)
+type Feat a f v = a -> [(f, v)]
 
 
--- | A version of `Feat` which creates the map and returns it.
-type FeatBase a prim map f v = a -> prim (map f v)
-
-
-------------------------------------------------------------------
--- CRF
-------------------------------------------------------------------
-
-
--- -- | A composite CRF model, in which the way potentials are computed is
--- -- abstracted away. Parametrized by the implementation of the map (`m`), objects
--- -- used as features (`f`), and potential values (`v`).
--- data CRF m f v = CRF
---   { value :: ExpCRF f v
---     -- ^ The basic component of the model: values assigned to features
---   , feature :: Feat Arc m f v
---     -- ^ Features assigned to the individual arcs, together with their
---     -- multiplicities
---   , potential :: Phi Arc v
---     -- ^ For each arc, `potenial` should give a number between 0 (very
---     -- improbable arc) and positive infinitive (particularly plausible arc),
---     -- while value 1 is neutral.
---   }
+-- -- | Computes the map (`map f v`) of features (`f`) assigned to a given element
+-- -- `a` (e.g. `Arc`), together with the corresponding multiplicities (`v`), and
+-- -- put them in the input map (note that computation is performed in the `prim`
+-- -- monad). The function should not assume that the given map is empty.
+-- type Feat a prim map f v = a -> map f v -> prim ()
+--
+--
+-- -- | A version of `Feat` which creates the map and returns it.
+-- type FeatBase a prim map f v = a -> prim (map f v)
 
 
 ------------------------------------------------------------------
@@ -269,26 +252,47 @@ marginals phi hype =
 -- | Expected number of occurrences of the individual features.
 --
 -- Note that it takes an existing map of expectations to update. We adopt this
--- strategy so that epxectation maps need not be created for each hypergraph
+-- strategy so that expectation maps need not be created for each hypergraph
 -- separately.
 expected
   :: (Map.Map prim map f v)
   => Hype           -- ^ The underlying hypergraph
-  -> Feat Arc prim map f v
-                    -- ^ Feature function
+  -> Feat Arc f v   -- ^ Feature function
   -> Prob Arc v     -- ^ Arc probabilities in the hypergraph
   -> map f v        -- ^ Existing map of expectations to update
-  -> Mame map f v prim ()
-expected hype feature probOn expMap =
-  Mame.withValueBuffer $ \buffer -> lift $ do
-    forM_ (S.toList $ H.arcs hype) $ \i -> do
-      -- put features and their multiplicities in the buffer
-      feature i buffer
-      -- multiply the multiplicities by the probability of the arc
-      let prob = probOn i
-      Map.modify (*prob) buffer
-      -- add the buffer to the result map
-      Map.mergeWith (+) expMap buffer
+  -- -> Mame map f v prim ()
+  -> prim ()
+expected hype feature probOn expMap = do
+  forM_ (S.toList $ H.arcs hype) $ \i -> do
+    -- multiply the multiplicities by the probability of the arc
+    let prob = probOn i
+        xs = map (Arr.second (*prob)) (feature i)
+    Map.mergeWithList (+) expMap xs
+
+
+-- -- | Expected number of occurrences of the individual features.
+-- --
+-- -- Note that it takes an existing map of expectations to update. We adopt this
+-- -- strategy so that expectation maps need not be created for each hypergraph
+-- -- separately.
+-- expected
+--   :: (Map.Map prim map f v)
+--   => Hype           -- ^ The underlying hypergraph
+--   -> Feat Arc prim map f v
+--                     -- ^ Feature function
+--   -> Prob Arc v     -- ^ Arc probabilities in the hypergraph
+--   -> map f v        -- ^ Existing map of expectations to update
+--   -> Mame map f v prim ()
+-- expected hype feature probOn expMap =
+--   Mame.withValueBuffer $ \buffer -> lift $ do
+--     forM_ (S.toList $ H.arcs hype) $ \i -> do
+--       -- put features and their multiplicities in the buffer
+--       feature i buffer
+--       -- multiply the multiplicities by the probability of the arc
+--       let prob = probOn i
+--       Map.modify (*prob) buffer
+--       -- add the buffer to the result map
+--       Map.mergeWith (+) expMap buffer
 
 
 -- expected
@@ -366,10 +370,11 @@ argmax xs =
 
 
 -- | Training data element.
-data Elem prim map f v = Elem
+data Elem f v = Elem
   { elemHype :: Hype
     -- ^ The hypergraph
-  , elemFeat :: Feat Arc prim map f v
+  -- , elemFeat :: Feat Arc prim map f v
+  , elemFeat :: Feat Arc f v
     -- ^ Function which assigns features `f` with their counts `v` to the
     -- individual arcs in `elemHype`; consider using `defaultFeat`
   , elemProb :: Prob Arc v
@@ -387,7 +392,7 @@ gradOn
   :: ( Map.Map prim map f v
      , Map.Map prim map f Double
      )
-  => [(Elem prim map f v, Phi Arc v)]
+  => [(Elem f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> map f Double
      -- ^ Gradient to update
@@ -396,14 +401,14 @@ gradOn elems grad = do
   -- positive component
   Mame.withValueBuffer $ \pos -> do
     -- negative component
-    Mame.withValueBuffer $ \neg -> do
+    Mame.withValueBuffer $ \neg -> lift $ do
       -- first clear both buffers
-      lift $ Map.clear pos >> Map.clear neg
+      Map.clear pos >> Map.clear neg
       let localGrad = Grad {posGrad=pos, negGrad=neg}
       -- update the gradient w.r.t. each dataset element
       localGradOn elems localGrad
       -- update the global `Double`-based gradient
-      lift $ mergeGradWith grad localGrad
+      mergeGradWith grad localGrad
 
 
 -- | We split the gradient into the positive and negative components, for better
@@ -418,11 +423,11 @@ data Grad map f v = Grad
 -- | Update the gradient (`Grad`) with respect to the given dataset.
 localGradOn
   :: (Map.Map prim map f v)
-  => [(Elem prim map f v, Phi Arc v)]
+  => [(Elem f v, Phi Arc v)]
      -- ^ A list of dataset elements for which to compute the gradient
   -> Grad map f v
      -- ^ The gradient to update
-  -> Mame map f v prim ()
+  -> prim ()
 localGradOn elems Grad{..} = do
   -- update each dataset element
   forM_ elems $ \(Elem{..}, elemPhi) -> do
@@ -509,7 +514,7 @@ inside' hype phi prior =
 -- | Probability of the element (graph) in the given model.
 probability
   :: Flo v
-  => Elem prim map f v
+  => Elem f v
   -> Phi Arc v -- ^ Arc potentials, computed on the basis of `ExpCRF`
   -> v
 probability Elem{..} phi =
@@ -528,51 +533,48 @@ probability Elem{..} phi =
 -- CRF model. The function is correct only if parameters of the model do not
 -- interact (for instance, they do not multiply together).
 defaultPotential
-  :: (Map.Map prim map f v)
-  -- => Map.Dom f  -- ^ The domain of `ExpCRF f v`
+  :: (Flo v)
   => ExpCRF f v
-  -> Hype
-  -> Feat Arc prim map f v
-  -> Mame map f v prim (Phi Arc v)
-defaultPotential crf hype feature = Mame.withValueBuffer $ \featMap -> do
-  lift $ do
-    fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
-      acc <- Ref.newPrimRef 1
-      Map.clear featMap >> feature arc featMap
-      Pipes.runListT $ do
-        (feat, occNum) <- Map.toList featMap
-        let x = crf feat `power` occNum
-        lift $ Ref.modifyPrimRef' acc (*x)
-      res <- Ref.readPrimRef acc
-      return (arc, res)
-  where
-    mkPhi xs =
-      let m = M.fromList xs
-      in  \arc -> case M.lookup arc m of
-                    Just v  -> v
-                    Nothing -> error "defaulPotential: incorrect arc"
-
-
+  -> Feat Arc f v
+  -> Phi Arc v
+defaultPotential crf features arc = product
+  [ crf feat `power` occNum
+  | (feat, occNum) <- features arc ]
 -- defaultPotential
---   :: (Flo v, Map m f v)
+--   :: (Map.Map prim map f v)
+--   -- => Map.Dom f  -- ^ The domain of `ExpCRF f v`
 --   => ExpCRF f v
---   -> Feat Arc m f v
---   -> Phi Arc v
--- defaultPotential crf feat arc = product
---   [ crf feat `power` occNum
---   | (feat, occNum) <- toList (feat arc) ]
+--   -> Hype
+--   -> Feat Arc prim map f v
+--   -> Mame map f v prim (Phi Arc v)
+-- defaultPotential crf hype feature = Mame.withValueBuffer $ \featMap -> do
+--   lift $ do
+--     fmap mkPhi . forM (S.toList $ H.arcs hype) $ \arc -> do
+--       acc <- Ref.newPrimRef 1
+--       Map.clear featMap >> feature arc featMap
+--       Pipes.runListT $ do
+--         (feat, occNum) <- Map.toList featMap
+--         let x = crf feat `power` occNum
+--         lift $ Ref.modifyPrimRef' acc (*x)
+--       res <- Ref.readPrimRef acc
+--       return (arc, res)
+--   where
+--     mkPhi xs =
+--       let m = M.fromList xs
+--       in  \arc -> case M.lookup arc m of
+--                     Just v  -> v
+--                     Nothing -> error "defaulPotential: incorrect arc"
 
-
--- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
--- Of course it might not be optimal in certain situations.
-defaultFeat
-  :: (Map.Map prim map f v)
-  => FeatBase a prim map f v
-  -> Feat a prim map f v
-defaultFeat featBase arc featMap = do
-  Map.clear featMap
-  featMap' <- featBase arc
-  Map.mergeWith (\_ x -> x) featMap featMap'
+-- -- | Create a default `Feat` implementation based on the corresponding `FeatBase`.
+-- -- Of course it might not be optimal in certain situations.
+-- defaultFeat
+--   :: (Map.Map prim map f v)
+--   => FeatBase a prim map f v
+--   -> Feat a prim map f v
+-- defaultFeat featBase arc featMap = do
+--   Map.clear featMap
+--   featMap' <- featBase arc
+--   Map.mergeWith (\_ x -> x) featMap featMap'
 
 
 ------------------------------------------------------------------
@@ -604,185 +606,59 @@ eps = 0.000001
 ------------------------------------------------------------------
 
 
-testHype :: Hype
-testHype = H.fromList
---   [ ( Node {unNode = 0}, M.empty )
-  [ ( Node {unNode = 0}, M.fromList
-      [ (Arc 0, S.empty) ] -- (1.0)
-    )
---   , ( Node {unNode = 1}, M.fromList
---       [ (Arc 1, S.empty) ] -- (0.0)
---     )
-  , ( Node {unNode = 2}, M.fromList
-      [ (Arc 2, S.fromList [Node {unNode = 0}]) -- (1.0)
-      -- , (Arc 3, S.fromList [Node {unNode = 1}]) -- (0.0)
-      ]
-    )
---   , ( Node {unNode = 3}, M.fromList
---       [ (Arc 4, S.fromList [Node {unNode = 0}]) -- (0.0)
---       -- , (Arc 5, S.fromList [Node {unNode = 1}]) -- (0.0)
---       ]
---     )
---   , ( Node {unNode = 4}, M.fromList
---       [ (Arc 6, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (0.0)
--- --       , (Arc 7, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
--- --       , (Arc 8, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
--- --       , (Arc 9, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
---       ]
---     )
-  , ( Node {unNode = 5}, M.fromList
-      [ (Arc 10, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (1.0)
---       , (Arc 11, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
---       , (Arc 12, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
---       , (Arc 13, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
-      ]
-    )
-  ]
---   where
---     localFromList xs = H.fromList
---       [ (S.singleton target, arc, sourceSet)
---       | (target, incoMap) <- xs
---       , (arc, sourceSet) <- M.toList incoMap
---       ]
-
-
-testProb :: Arc -> F.LogFloat
-testProb (Arc x) = case x of
-  0 -> 1.0
-  2 -> 1.0
-  10 -> 1.0
-  _ -> 0.0
-
-
-testFeatBase :: FeatBase Arc IO (RefMap IO) String F.LogFloat
-testFeatBase (Arc x) =
-  mk1 $ "on" ++ show x
-  where
-    mk1 f = Map.newRefMap $ M.singleton f 1
-
-
-testSGD :: IO ()
-testSGD = do
-
-  -- parameter map
-  paraMap <- Map.newRefMap M.empty
-
-  -- enrich the dataset elements with potential functions, based on the current
-  -- parameter values (and using `defaultPotential`)
-  let withPhi xs = do
-        paraPure <- liftIO $ Map.unsafeFreeze paraMap
-        let crf x = F.logToLogFloat $ case paraPure x of
-              Nothing -> 0
-              Just v  -> v
-        forM xs $ \x@Elem{..} -> do
-          phi <- defaultPotential crf elemHype elemFeat
-          return (x, phi)
-
-  -- notification function
-  let notify k
-        | doneTotal k == doneTotal (k - 1) =
-            liftIO $ putStr "."
-        | otherwise = do
-            -- parameters
-            liftIO $ do
-              putStrLn "" >> putStr "params: "
-              print =<< Ref.readPrimRef (unRefMap paraMap)
-            -- probability
-            liftIO $ putStr "probability: "
-            batch <- withPhi dataList
-            liftIO . print . product $ map (uncurry probability) batch
-
-  -- gradient computation
-  let computeGradient grad batch0 = do
-        batch <- withPhi batch0
-        gradOn batch grad
-
-  -- SGD parameters
-  let sgdParams = SGD.sgdArgsDefault
-        { SGD.batchSize = batchSize
-        , SGD.iterNum = 10
-        , SGD.regVar = 4
-        , SGD.gain0 = 0.25
-        , SGD.tau = 5
-        , SGD.gamma = 0.9
-        }
-
-  -- Buffer creation
-  let makeBuff = Mame.Make
-        { Mame.mkValueBuffer = Map.newRefMap M.empty
-        , Mame.mkDoubleBuffer = Map.newRefMap M.empty
-        }
-
-  -- Convert the dataset
-  SGD.Dataset.withVect dataList $ \dataSet -> do
-    -- TODO: change the type of `sgd` so that it runs internally `runMame` with
-    -- provided `makeBuff`
-    Mame.runMame makeBuff $ do
-      SGD.sgd
-        sgdParams
-        notify
-        computeGradient
-        dataSet
-        paraMap
-
-  where
-
-    -- dataset
-    dataList = replicate 1000 $ Elem
-      { elemHype = testHype
-      , elemFeat = defaultFeat testFeatBase
-      -- below, the target probabilities
-      , elemProb = testProb
-      }
-
-    batchSize = 30
-    trainSize = length dataList
-
-    doneTotal :: Int -> Int
-    doneTotal = floor . done
-
-    done :: Int -> Double
-    done i
-        = fromIntegral (i * batchSize)
-        / fromIntegral trainSize
-
-
 -- testHype :: Hype
 -- testHype = H.fromList
---   [ ( Node 1, M.empty )
---   , ( Node 2, M.empty )
---   , ( Node 3, M.fromList
---       [ (Arc 1, S.fromList [Node 1]) ]
+-- --   [ ( Node {unNode = 0}, M.empty )
+--   [ ( Node {unNode = 0}, M.fromList
+--       [ (Arc 0, S.empty) ] -- (1.0)
 --     )
---   , ( Node 4, M.fromList
---       [ (Arc 2, S.fromList [Node 2, Node 3]) ]
+-- --   , ( Node {unNode = 1}, M.fromList
+-- --       [ (Arc 1, S.empty) ] -- (0.0)
+-- --     )
+--   , ( Node {unNode = 2}, M.fromList
+--       [ (Arc 2, S.fromList [Node {unNode = 0}]) -- (1.0)
+--       -- , (Arc 3, S.fromList [Node {unNode = 1}]) -- (0.0)
+--       ]
 --     )
---   , ( Node 5, M.empty )
---   , ( Node 6, M.fromList
---       [ (Arc 3, S.fromList [Node 2, Node 5]) ]
---     )
---   , ( Node 7, M.fromList
---       [ (Arc 4, S.fromList [Node 3, Node 6]) ]
+-- --   , ( Node {unNode = 3}, M.fromList
+-- --       [ (Arc 4, S.fromList [Node {unNode = 0}]) -- (0.0)
+-- --       -- , (Arc 5, S.fromList [Node {unNode = 1}]) -- (0.0)
+-- --       ]
+-- --     )
+-- --   , ( Node {unNode = 4}, M.fromList
+-- --       [ (Arc 6, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (0.0)
+-- -- --       , (Arc 7, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
+-- -- --       , (Arc 8, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
+-- -- --       , (Arc 9, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
+-- --       ]
+-- --     )
+--   , ( Node {unNode = 5}, M.fromList
+--       [ (Arc 10, S.fromList [Node {unNode = 0}, Node {unNode = 2}]) -- (1.0)
+-- --       , (Arc 11, S.fromList [Node {unNode = 0}, Node {unNode = 3}]) -- (0.0)
+-- --       , (Arc 12, S.fromList [Node {unNode = 1}, Node {unNode = 2}]) -- (0.0)
+-- --       , (Arc 13, S.fromList [Node {unNode = 1}, Node {unNode = 3}]) -- (0.0)
+--       ]
 --     )
 --   ]
+-- --   where
+-- --     localFromList xs = H.fromList
+-- --       [ (S.singleton target, arc, sourceSet)
+-- --       | (target, incoMap) <- xs
+-- --       , (arc, sourceSet) <- M.toList incoMap
+-- --       ]
 --
 --
--- testCRF :: ExpCRF String Double
--- testCRF x = case x of
---   "on1" -> exp $  0.6931471805599453 -- 2
---   "on2" -> exp $ -0.6931471805599453 -- 0.5
---   "on3" -> exp $  0                  -- 1
---   "on4" -> exp $  0.6931471805599453 -- 2
---   _ ->     exp $  0                  -- 1
+-- testProb :: Arc -> F.LogFloat
+-- testProb (Arc x) = case x of
+--   0 -> 1.0
+--   2 -> 1.0
+--   10 -> 1.0
+--   _ -> 0.0
 --
 --
 -- testFeatBase :: FeatBase Arc IO (RefMap IO) String F.LogFloat
--- testFeatBase (Arc x) = case x of
---   1 -> mk1 "on1"
---   2 -> mk1 "on2"
---   3 -> mk1 "on3"
---   4 -> mk1 "on4"
---   _ -> Map.newRefMap M.empty
+-- testFeatBase (Arc x) =
+--   mk1 $ "on" ++ show x
 --   where
 --     mk1 f = Map.newRefMap $ M.singleton f 1
 --
@@ -858,12 +734,7 @@ testSGD = do
 --       { elemHype = testHype
 --       , elemFeat = defaultFeat testFeatBase
 --       -- below, the target probabilities
---       , elemProb = \arc -> case arc of
---           Arc 1 -> 1.0
---           Arc 2 -> 0.0
---           Arc 3 -> 1.0
---           Arc 4 -> 1.0
---           Arc _ -> error "no such arc"
+--       , elemProb = testProb
 --       }
 --
 --     batchSize = 30

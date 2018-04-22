@@ -216,7 +216,7 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
     doIt momentum u k stdGen
 
       | done k > iterNum = do
-          -- Run notification
+          -- Run notification one last time
           notify k
 
       | otherwise = do
@@ -226,7 +226,6 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
           -- Sample the dataset
           (batch, stdGen') <- liftIO $
             D.sample stdGen batchSize dataset
-
 
           -- Compute the gradient and put it in `u`
           liftIO (Map.clear u)
@@ -251,6 +250,8 @@ sgd SgdArgs{..} notify gradOn dataset paraMap = do
 
 
 -- | Apply regularization *to the gradient*.
+-- TODO: This is probably correct, but I'm not 100% sure. Compare with the old
+-- implementation.
 applyRegularization
   :: (PrimMonad prim, Map prim map k Double)
   => Double       -- ^ Regularization parameter
@@ -283,10 +284,12 @@ updateMomentum
   -> map k Double -- ^ The previous momentum
   -> map k Double -- ^ The current, scaled gradient
   -> prim ()
-updateMomentum gammaCoef momentum grad =
-  Map.mergeWith update momentum grad
+updateMomentum gammaCoef momentum grad = do
+  Map.modify (*gammaCoef) momentum
+  Map.mergeWith (+) momentum grad
+  -- Map.mergeWith update momentum grad
   where
-    update x y = gammaCoef * x + y
+    -- update x y = gammaCoef * x + y
 
 
 -- -- | Compute the new momentum (gradient) vector.

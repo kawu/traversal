@@ -2,6 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 
 -- | Solution for the MWE identification shared task.
@@ -25,8 +26,10 @@ module NLP.Departage.SharedTask
   ) where
 
 
+import           GHC.Generics (Generic)
+
 import           Control.Applicative ((<|>))
-import           Control.Monad (forM, guard)
+import           Control.Monad (guard)
 import           Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.State.Strict as State
 -- import qualified Pipes as Pipes
@@ -40,9 +43,11 @@ import qualified Data.Tree as R
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import           Data.Hashable (Hashable)
+-- import qualified Data.HashMap.Strict as HM
 
 import qualified Data.Number.LogFloat as F
-import qualified Data.PrimRef as Ref
+-- import qualified Data.PrimRef as Ref
 
 import qualified NLP.Departage.Hype as H
 import qualified NLP.Departage.DepTree.Cupt as Cupt
@@ -333,7 +338,9 @@ data Feat mwe
     { currTag :: mwe
     , currLemma :: T.Text
     }
-  deriving (Read, Show, Eq, Ord)
+  deriving (Generic, Read, Show, Eq, Ord)
+
+instance Hashable mwe => Hashable (Feat mwe)
 
 
 -- | Collect unary features for a given token/MWE pair.
@@ -443,34 +450,29 @@ collectSister options (sisTok, sisMwe) (curTok, curMwe) =
 
 
 ----------------------------------------------
--- CRF element
+-- Feature extraction
 ----------------------------------------------
 
 
--- | Create a CRF training/tagging element.
-mkElem
-  :: (Ord mwe, Read mwe, Show mwe)
+-- | Retrieve the list of features for the given sentence/arc pair.
+featuresIn
+  :: (Ord mwe)
   => Cfg.FeatConfig
   -> AH.EncHype mwe Cupt.Token
-  -> CRF.Elem IO (Map.RefMap IO) (Feat mwe) F.LogFloat
--- mkElem depTree =
-mkElem cfg encoded =
+  -> H.Arc -> [Feat mwe]
+featuresIn cfg encoded =
 
-  CRF.Elem
-  { CRF.elemHype = hype
-  , CRF.elemProb = F.logFloat <$> AH.encArcProb encoded
-  , CRF.elemFeat = CRF.defaultFeat $ \arcID -> do
-      let arcHead = H.head arcID hype
-          arcTail = H.tail arcID hype
-          featList =
-            mkUnary arcHead ++
-            concatMap (mkBinary arcHead) (S.toList arcTail)
-      Map.newRefMap . M.fromList $ map (,1) featList
-  }
+  \arcID ->
+    let arcHead = H.head arcID hype
+        arcTail = H.tail arcID hype
+        featList =
+          mkUnary arcHead ++
+          concatMap (mkBinary arcHead) (S.toList arcTail)
+    -- in M.fromList $ map (,1) featList
+    in featList
 
   where
 
-    -- encoded = AH.encodeTree depTree
     hype =  AH.encHype encoded
 
     mkBinary arcHead arcTail
@@ -505,17 +507,42 @@ mkElem cfg encoded =
 
 
 ----------------------------------------------
+-- CRF element
+----------------------------------------------
+
+
+-- | Create a CRF training/tagging element.
+mkElem
+  :: (Ord mwe)
+  => Cfg.FeatConfig
+  -> AH.EncHype mwe Cupt.Token
+  -- -> CRF.Elem IO (Map.RefMap IO) (Feat mwe) F.LogFloat
+  -> CRF.Elem (Feat mwe) F.LogFloat
+mkElem cfg encoded =
+  CRF.Elem
+  { CRF.elemHype = AH.encHype encoded
+  , CRF.elemProb = F.logFloat <$> AH.encArcProb encoded
+  , CRF.elemFeat = map (, 1) . featuresIn cfg encoded
+--   , CRF.elemFeat = CRF.defaultFeat $ \arcID -> do
+--       Map.newRefMap (featsIn arcID)
+  }
+  where
+    -- featsIn = map (, 1) . featuresIn cfg encoded
+
+
+----------------------------------------------
 -- Training
 ----------------------------------------------
 
 
 -- | A particular CRF model (IO embedded parameter map).
-type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
+type ParaMap mwe = Map.IndiMap IO (Feat mwe) Double
+-- type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
 
 
 -- | Train disambiguation module.
 train
-  :: (Ord mwe, Read mwe, Show mwe)
+  :: (Ord mwe, Read mwe, Show mwe, Hashable mwe)
   => Cfg.FeatConfig
   -> SGD.SgdArgs                  -- ^ SGD configuration
   -> [AH.DepTree mwe Cupt.Token]  -- ^ Training data
@@ -524,10 +551,7 @@ train
 train cfg sgdArgsT trainData devData = do
   hSetBuffering stdout NoBuffering
 
-  -- parameter map
-  paraMap <- Map.newRefMap M.empty
-
-  -- parameters
+  -- parameters, helpers
   let
     trainSize = length trainData
     batchSize = SGD.batchSize sgdArgsT
@@ -540,6 +564,18 @@ train cfg sgdArgsT trainData devData = do
         = fromIntegral (i * batchSize)
         / fromIntegral trainSize
 
+  -- list of features in the training dataset
+  let featSet = S.fromList $ do
+        sent <- trainData
+        let enc = AH.encodeTree sent
+        arc <- (S.toList . H.arcs) (AH.encHype enc)
+        featuresIn cfg enc arc
+      featMap () = M.fromList . map (,0) $ S.toList featSet
+
+  -- parameter map
+  paraMap <- Map.fromMap $ featMap ()
+  -- paraMap <- Map.newRefMap M.empty
+
   -- transforming data to the CRF form
   let fromSent = mkElem cfg . AH.encodeTree
 
@@ -550,9 +586,13 @@ train cfg sgdArgsT trainData devData = do
         let crf x = F.logToLogFloat $ case paraPure x of
               Nothing -> 0
               Just v  -> v
-        forM xs $ \x@CRF.Elem{..} -> do
-          phi <- CRF.defaultPotential crf elemHype elemFeat
+        return $ do
+          x@CRF.Elem{..} <- xs
+          let phi = CRF.defaultPotential crf elemFeat
           return (x, phi)
+--         forM xs $ \x@CRF.Elem{..} -> do
+--           phi <- CRF.defaultPotential crf elemHype elemFeat
+--           return (x, phi)
 
   -- dataset probability
   let dataProb dataset = do
@@ -568,7 +608,7 @@ train cfg sgdArgsT trainData devData = do
             -- parameters
             liftIO $ do
               putStrLn ""
-              Ref.readPrimRef (Map.unRefMap paraMap) >>= \m -> do
+              Map.toMap paraMap >>= \m -> do
                 putStr "num param: " >> print (M.size m)
                 let sortParams = L.sort . M.elems
                 putStr "min param: " >> print (take 1 $ sortParams m)
@@ -594,8 +634,8 @@ train cfg sgdArgsT trainData devData = do
 
   -- Buffer creation
   let makeBuff = Mame.Make
-        { Mame.mkValueBuffer = Map.newRefMap M.empty
-        , Mame.mkDoubleBuffer = Map.newRefMap M.empty
+        { Mame.mkValueBuffer = Map.fromMap $ featMap () -- Map.newRefMap M.empty
+        , Mame.mkDoubleBuffer = Map.fromMap $ featMap () -- Map.newRefMap M.empty
         }
 
   -- pureTrainData <- trainData
@@ -630,12 +670,13 @@ data TagConfig = TagConfig
 -- NOTE: the input tree may have some MWE annotations. These will be ignored and
 -- replaced by model-based annotations.
 tagOne
-  :: (Ord mwe, Read mwe, Show mwe)
+  :: (Ord mwe, Read mwe, Show mwe, Hashable mwe)
   => Cfg.FeatConfig
   -> TagConfig
   -> ParaMap mwe
   -> AH.DepTree mwe Cupt.Token
-  -> Mame.Mame (Map.RefMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
+  -- -> Mame.Mame (Map.RefMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
+  -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
 tagOne cfg TagConfig{..} paraMap depTree = do
   let encTree = AH.encodeTree depTree
       crfElem = mkElem cfg encTree
@@ -644,7 +685,8 @@ tagOne cfg TagConfig{..} paraMap depTree = do
   let crf x = F.logToLogFloat $ case paraPure x of
         Nothing -> 0
         Just v  -> v
-  phi <- CRF.defaultPotential crf (CRF.elemHype crfElem) (CRF.elemFeat crfElem)
+  -- phi <- CRF.defaultPotential crf (CRF.elemHype crfElem) (CRF.elemFeat crfElem)
+      phi = CRF.defaultPotential crf (CRF.elemFeat crfElem)
   -- END: computing arc potentials
   let (prob, _) = CRF.marginals phi (AH.encHype encTree)
       nodeSet = CRF.bestPath phi (AH.encHype encTree)
@@ -657,16 +699,22 @@ tagOne cfg TagConfig{..} paraMap depTree = do
 
 -- | Tag several dependency trees (using `tagOne`).
 tagMany
-  :: (Ord mwe, Read mwe, Show mwe)
+  :: (Ord mwe, Read mwe, Show mwe, Hashable mwe)
   => Cfg.FeatConfig
   -> TagConfig
   -> ParaMap mwe
   -> [AH.DepTree mwe Cupt.Token]
   -> IO [AH.DepTree mwe Cupt.Token]
 tagMany cfg tagCfg paraMap depTrees = do
-  let makeBuff = Mame.Make
-        { Mame.mkValueBuffer = Map.newRefMap M.empty
-        , Mame.mkDoubleBuffer = Map.newRefMap M.empty
+  featSet <- M.keysSet <$> Map.toMap paraMap
+  let featMap () = M.fromList . map (,0) $ S.toList featSet
+      makeBuff = Mame.Make
+        -- { Mame.mkValueBuffer = Map.newRefMap M.empty
+        -- , Mame.mkDoubleBuffer = Map.newRefMap M.empty
+        -- { Mame.mkValueBuffer = Map.newIndiMap $ Map.indiSet paraMap
+        -- , Mame.mkDoubleBuffer = Map.newIndiMap $ Map.indiSet paraMap
+        { Mame.mkValueBuffer = Map.fromMap $ featMap ()
+        , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
         }
   Mame.runMame makeBuff $ do
     mapM (tagOne cfg tagCfg paraMap) depTrees
