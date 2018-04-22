@@ -181,6 +181,7 @@ sgd
   -> map k Double
   -- ^ Starting point
   -> Mame map k v IO ()
+{-# INLINABLE sgd #-}
 sgd SgdArgs{..} notify gradOn dataset paraMap = do
 
   -- A map for the momentum gradient
@@ -258,6 +259,7 @@ applyRegularization
   -> map k Double -- ^ The parameters
   -> map k Double -- ^ The current gradient
   -> prim ()
+{-# INLINE applyRegularization #-}
 applyRegularization regParam params grad =
   Map.mergeWith update grad params
   where
@@ -284,6 +286,7 @@ updateMomentum
   -> map k Double -- ^ The previous momentum
   -> map k Double -- ^ The current, scaled gradient
   -> prim ()
+{-# INLINE updateMomentum #-}
 updateMomentum gammaCoef momentum grad = do
   Map.modify (*gammaCoef) momentum
   Map.mergeWith (+) momentum grad
@@ -311,6 +314,7 @@ scale
   => Double
   -> map k Double
   -> prim ()
+{-# INLINE scale #-}
 scale c = Map.modify (c*)
 
 
@@ -329,6 +333,7 @@ addTo
   => map k Double
   -> map k Double
   -> prim ()
+{-# INLINE addTo #-}
 addTo w v =
   Map.mergeWith (\x y -> x + y) v w
 

@@ -130,6 +130,7 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   --
   -- TODO: Actually, `toList` could be also implemented in terms of `toMap`.
   toMap :: map k v -> prim (M.Map k v)
+  {-# INLINE toMap #-}
   toMap m = do
     regMap <- flip State.runStateT M.empty $ do
       Pipes.runListT $ do
@@ -173,6 +174,7 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   -- By default implemented as `modify $ const 0`
   clear :: map k v -> prim ()
   clear = modify $ const 0
+  {-# INLINE clear #-}
 
   -- | Transform the map into a pure key -> value function.
   --
@@ -181,6 +183,7 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   freeze m = do
     pureMap <- toMap m
     return $ \x -> M.lookup x pureMap
+  {-# INLINE freeze #-}
 
   -- | Freeze the map as a pure key -> value function. The function is unsafe in
   -- the sense that it doesn't guarantee that the result `k -> v` is functional
@@ -189,6 +192,7 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   -- By default `unsafeFreeze = freeze`.
   unsafeFreeze :: map k v -> prim (k -> Maybe v)
   unsafeFreeze = freeze
+  {-# INLINE unsafeFreeze #-}
 
 
 -- | Encoding from and to a string.
@@ -345,6 +349,7 @@ instance
     forM_ [0 .. UM.length indiVect - 1] $ \i -> do
       x <- UM.unsafeRead indiVect i
       UM.unsafeWrite indiVect i (f x)
+  {-# INLINE modify #-}
 
   mergeWith f m1 m2 = do
     let v1 = indiVect m1
@@ -355,6 +360,7 @@ instance
       x <- UM.unsafeRead v1 i
       y <- UM.unsafeRead v2 i
       UM.unsafeWrite v1 i (f x y)
+  {-# INLINE mergeWith #-}
 
   mergeWithList f IndiMap{..} xs = do
     forM_ xs $ \(key, val) -> do
@@ -364,8 +370,10 @@ instance
         Just ix -> do
           x <- UM.unsafeRead indiVect ix
           UM.unsafeWrite indiVect ix (f x val)
+  {-# INLINE mergeWithList #-}
 
   clear IndiMap{..} = UM.set indiVect 0
+  {-# INLINE clear #-}
 
   toList IndiMap{..} = Pipes.Select $ do
 --     let ks = S.toList indiSet
@@ -374,6 +382,7 @@ instance
     forM_ (HM.toList indiMap) $ \(key, ix) -> do
       val <- lift $ UM.unsafeRead indiVect ix
       Pipes.yield (key, val)
+  {-# INLINE toList #-}
 
   freeze IndiMap{..} = do
     frozen <- U.freeze indiVect
@@ -381,6 +390,7 @@ instance
       -- ix <- S.lookupIndex key indiSet
       ix <- HM.lookup key indiMap
       return $ frozen U.! ix
+  {-# INLINE freeze #-}
 
   unsafeFreeze IndiMap{..} = do
     frozen <- U.unsafeFreeze indiVect
@@ -388,3 +398,4 @@ instance
       -- ix <- S.lookupIndex key indiSet
       ix <- HM.lookup key indiMap
       return $ frozen U.! ix
+  {-# INLINE unsafeFreeze #-}

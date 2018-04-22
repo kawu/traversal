@@ -55,7 +55,9 @@ import qualified NLP.Departage.DepTree.AsHype as AH
 import qualified NLP.Departage.Prob as P
 
 import qualified NLP.Departage.CRF as CRF
+import           NLP.Departage.CRF (gradOn)
 import qualified NLP.Departage.CRF.SGD as SGD
+import           NLP.Departage.CRF.SGD (sgd)
 import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.CRF.Mame as Mame
@@ -540,6 +542,11 @@ type ParaMap mwe = Map.IndiMap IO (Feat mwe) Double
 -- type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
 
 
+{-# SPECIALIZE sgd :: (Ord mwe, Hashable mwe) => SGD.SgdArgs -> (Int -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO ()) -> (Map.IndiMap IO (Feat mwe) Double -> [AH.DepTree mwe Cupt.Token] -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO ()) -> SGD.Dataset.Dataset (AH.DepTree mwe Cupt.Token) -> Map.IndiMap IO (Feat mwe) Double -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO () #-}
+
+{-# SPECIALIZE gradOn :: (Ord mwe, Hashable mwe) => [(CRF.Elem (Feat mwe) F.LogFloat, H.Arc -> F.LogFloat)] -> Map.IndiMap IO (Feat mwe) Double -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO () #-}
+
+
 -- | Train disambiguation module.
 train
   :: (Ord mwe, Read mwe, Show mwe, Hashable mwe)
@@ -626,7 +633,7 @@ train cfg sgdArgsT trainData devData = do
   -- gradient computation
   let computeGradient grad batch0 = do
         batch <- withPhi $ map fromSent batch0
-        CRF.gradOn batch grad
+        gradOn batch grad
 --         liftIO $ do
 --           putStrLn "# GRADIENT"
 --           gradMap <- Ref.readPrimRef $ Map.unRefMap grad
@@ -644,7 +651,7 @@ train cfg sgdArgsT trainData devData = do
     -- TODO: change the type of `sgd` so that it runs internally `runMame` with
     -- provided `makeBuff`
     Mame.runMame makeBuff $ do
-      SGD.sgd
+      sgd
         sgdArgsT
         notify
         computeGradient

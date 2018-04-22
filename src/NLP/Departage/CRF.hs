@@ -262,6 +262,7 @@ expected
   -> map f v        -- ^ Existing map of expectations to update
   -- -> Mame map f v prim ()
   -> prim ()
+{-# INLINE expected #-}
 expected hype feature probOn expMap = do
   forM_ (S.toList $ H.arcs hype) $ \i -> do
     -- multiply the multiplicities by the probability of the arc
@@ -397,7 +398,8 @@ gradOn
   -> map f Double
      -- ^ Gradient to update
   -> Mame map f v prim ()
-gradOn elems grad = do
+{-# INLINABLE gradOn #-}
+gradOn elems grad =
   -- positive component
   Mame.withValueBuffer $ \pos -> do
     -- negative component
@@ -428,6 +430,7 @@ localGradOn
   -> Grad map f v
      -- ^ The gradient to update
   -> prim ()
+{-# INLINE localGradOn #-}
 localGradOn elems Grad{..} = do
   -- update each dataset element
   forM_ elems $ \(Elem{..}, elemPhi) -> do
@@ -461,6 +464,7 @@ mergeGradWith
   => map f Double
   -> Grad map f v
   -> prim ()
+{-# INLINE mergeGradWith #-}
 mergeGradWith paraMap Grad{..} = do
   let add param x = param + toDouble x
       sub param x = param - toDouble x
