@@ -47,6 +47,8 @@ data Command
         -- ^ Dataset to tag
       , outPath :: FilePath
         -- ^ Output file
+      , bestPath :: Bool
+        -- ^ Use best path instead of marginals
       }
     | LiftCase
 
@@ -109,6 +111,11 @@ tagOptions = Tag
        <> long "output"
        <> short 'o'
        <> help "Output file"
+        )
+  <*> switch
+        ( long "bestpath"
+       <> short 'b'
+       <> help "Use best path instead of marginals"
         )
 
 
@@ -201,6 +208,8 @@ run cmd =
             if isAbsolute configPath
             then configPath
             else "./" </> configPath
+          tagConfig = Task.TagConfig
+            { tagBestPath = bestPath }
       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
       -- paraMap <- Map.load keyEnc basicPath
       -- paraMapMWE <- Map.load keyEnc mwePath
@@ -209,7 +218,7 @@ run cmd =
       putStr "# MWE types: " >> print (Model.mweTypSet model)
       Task.tagFile
         (Model.mweTypSet model)
-        config
+        config tagConfig
         -- paraMap
         (Model.paraMapBase model)
         -- paraMapMWE

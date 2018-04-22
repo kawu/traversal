@@ -16,6 +16,7 @@ module NLP.Departage.SharedTask
   , retrieveTypes
   -- , retrieveTypes'
   , train
+  , TagConfig(..)
   , tagFile
 
   -- * Utils
@@ -613,6 +614,17 @@ train cfg sgdArgsT trainData devData = do
   return paraMap
 
 
+----------------------------------------------
+-- Tagging
+----------------------------------------------
+
+
+-- | Additional tagging configuration.
+data TagConfig = TagConfig
+  { tagBestPath :: Bool
+  }
+
+
 -- | Tag the dependency tree given the model parameters.
 --
 -- NOTE: the input tree may have some MWE annotations. These will be ignored and
@@ -620,10 +632,11 @@ train cfg sgdArgsT trainData devData = do
 tagOne
   :: (Ord mwe, Read mwe, Show mwe)
   => Cfg.FeatConfig
+  -> TagConfig
   -> ParaMap mwe
   -> AH.DepTree mwe Cupt.Token
   -> Mame.Mame (Map.RefMap IO) (Feat mwe) F.LogFloat IO (AH.DepTree mwe Cupt.Token)
-tagOne cfg paraMap depTree = do
+tagOne cfg TagConfig{..} paraMap depTree = do
   let encTree = AH.encodeTree depTree
       crfElem = mkElem cfg encTree
   -- START: computing arc potentials (UNSAFELY?)
@@ -634,7 +647,11 @@ tagOne cfg paraMap depTree = do
   phi <- CRF.defaultPotential crf (CRF.elemHype crfElem) (CRF.elemFeat crfElem)
   -- END: computing arc potentials
   let (prob, _) = CRF.marginals phi (AH.encHype encTree)
-      depTree' = AH.decodeTree encTree prob
+      nodeSet = CRF.bestPath phi (AH.encHype encTree)
+      depTree' =
+        if tagBestPath
+        then AH.decodeTree' encTree nodeSet
+        else AH.decodeTree encTree prob
   return depTree'
 
 
@@ -642,16 +659,17 @@ tagOne cfg paraMap depTree = do
 tagMany
   :: (Ord mwe, Read mwe, Show mwe)
   => Cfg.FeatConfig
+  -> TagConfig
   -> ParaMap mwe
   -> [AH.DepTree mwe Cupt.Token]
   -> IO [AH.DepTree mwe Cupt.Token]
-tagMany cfg paraMap depTrees = do
+tagMany cfg tagCfg paraMap depTrees = do
   let makeBuff = Mame.Make
         { Mame.mkValueBuffer = Map.newRefMap M.empty
         , Mame.mkDoubleBuffer = Map.newRefMap M.empty
         }
   Mame.runMame makeBuff $ do
-    mapM (tagOne cfg paraMap) depTrees
+    mapM (tagOne cfg tagCfg paraMap) depTrees
 
 
 -- -- | High-level tagging function.
@@ -670,17 +688,18 @@ tagMany cfg paraMap depTrees = do
 tagFile
   :: S.Set Cupt.MweTyp
   -> Cfg.Config
+  -> TagConfig
   -> ParaMap MWE
   -> ParaMap (Maybe Cupt.MweTyp)
   -> FilePath -- ^ Input file
   -> FilePath -- ^ Output file
   -> IO ()
-tagFile typSet config paraMap paraMap' inpFile outFile = do
+tagFile typSet config tagConfig paraMap paraMap' inpFile outFile = do
   -- xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
   xs <- readDataWith config inpFile
   ys <- map (encodeTypeAmbiguity typSet)
-    <$> tagMany (Cfg.baseFeatConfig config) paraMap  xs
-  zs <- tagMany (Cfg.mweFeatConfig  config) paraMap' ys
+    <$> tagMany (Cfg.baseFeatConfig config) tagConfig paraMap  xs
+  zs <- tagMany (Cfg.mweFeatConfig  config) tagConfig paraMap' ys
   Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
 
 

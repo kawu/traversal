@@ -16,6 +16,7 @@ module NLP.Departage.CRF
 , normFactor
 , marginals
 , expected
+, bestPath
 
 -- * Probability
 , probability
@@ -36,6 +37,7 @@ module NLP.Departage.CRF
 
 
 import           Control.Monad (forM_, forM)
+import qualified Control.Arrow as Arr
 -- import qualified Control.Monad.ST as ST
 -- import           Control.Monad.ST (ST)
 import           Control.Monad.Trans.Class (lift)
@@ -66,7 +68,7 @@ import           NLP.Departage.CRF.Map
 import           NLP.Departage.CRF.Mame (Mame)
 import qualified NLP.Departage.CRF.Mame as Mame
 
-import Debug.Trace (trace)
+-- import Debug.Trace (trace)
 
 
 ------------------------------------------------------------------
@@ -304,6 +306,60 @@ expected hype feature probOn expMap =
 --     | (feat, occNum) <- toList (feature crf j) ]
 
 
+-- | Compute the optimal incoming arc for each node. A variant of `inside`, an
+-- alternative to `marginals`.
+bestPath
+  :: (Num v, Ord v)
+  => Phi Arc v                -- ^ The potential of arcs
+  -> Hype                     -- ^ The underlying hypergraph
+  -- -> (Node -> Maybe Arc)      -- ^ The chosen incoming arc for each node
+  -> S.Set Node               -- ^ The set of chosen hypernodes
+bestPath phi hype =
+
+  -- fst . insideNode
+  collectNode bestFinal
+
+  where
+
+    bestFinal =
+      let
+        toPair i = (i, snd $ insideNode i)
+        finals = S.toList (H.final hype)
+      in
+        case (fst . argmax) (map toPair finals) of
+          Nothing -> error "CRF.bestPath: no final hypernode!"
+          Just i -> i
+
+    collectNode i = S.insert i $
+      case fst (insideNode i) of
+        Nothing -> S.empty
+        Just j  -> collectArc j
+    collectArc j = S.unions
+      [ collectNode i
+      | i <- S.toList (H.tail j hype) ]
+
+    insideNode = Memo.wrap H.Node H.unNode Memo.integral insideNode'
+    insideNode' i = argmax
+      [ (j, insideArc j)
+      | j <- S.toList (H.incoming i hype) ]
+
+    insideArc = Memo.wrap H.Arc H.unArc Memo.integral insideArc'
+    insideArc' j = phi j * product
+      [ snd (insideNode i)
+      | i <- S.toList (H.tail j hype) ]
+
+
+argmax :: (Ord v, Num v) => [(a, v)] -> (Maybe a, v)
+argmax xs =
+  case xs of
+    hd : tl -> choice (Arr.first Just hd) (argmax tl)
+    [] -> (Nothing, 1)
+  where
+    choice (x, xv) (y, yv)
+      | xv > yv   = (x, xv)
+      | otherwise = (y, yv)
+
+
 ------------------------------------------------------------------
 -- Training
 ------------------------------------------------------------------
@@ -524,18 +580,18 @@ defaultFeat featBase arc featMap = do
 ------------------------------------------------------------------
 
 
-almostEq :: Flo v => v -> v -> Bool
-almostEq x0 y0
-  | isZero x && isZero y = True
-  | otherwise = 1.0 - eps < z && z < 1.0 + eps
-  where
-    x = toLogDouble x0
-    y = toLogDouble y0
-    z = x / y
+-- almostEq :: Flo v => v -> v -> Bool
+-- almostEq x0 y0
+--   | isZero x && isZero y = True
+--   | otherwise = 1.0 - eps < z && z < 1.0 + eps
+--   where
+--     x = toLogDouble x0
+--     y = toLogDouble y0
+--     z = x / y
 
 
-isZero :: (Fractional t, Ord t) => t -> Bool
-isZero x = abs x < eps
+-- isZero :: (Fractional t, Ord t) => t -> Bool
+-- isZero x = abs x < eps
 
 
 -- | A very small number.

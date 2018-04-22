@@ -19,6 +19,7 @@ module NLP.Departage.DepTree.AsHype
   , Label (..)
   , encodeTree
   , decodeTree
+  , decodeTree'
 
   -- * Temporary
   , testAsHype
@@ -598,6 +599,29 @@ decodeTree EncHype{..} nodeProb =
           | hypeNodeID <- S.toList (encInterps depNodeID)
           , let Label{..} = encLabel hypeNodeID
           ]
+        tok = encToken depNodeID
+      in
+        (prob, tok)
+
+
+-- | A version of `decodeTree` based on pre-selected nodes.
+decodeTree'
+  :: (Ord a)
+  => EncHype a b
+     -- ^ Its encoded version
+  -> S.Set Hype.Node
+     -- ^ Pre-selected nodes
+  -> DepTree a b
+decodeTree' EncHype{..} nodeSet =
+  fmap decodeNode encTree
+  where
+    decodeNode depNodeID =
+      let
+        prob = P.fromList $ do
+          hypeNodeID <- S.toList (encInterps depNodeID)
+          let Label{..} = encLabel hypeNodeID
+              nodeProb = if S.member hypeNodeID nodeSet then 1 else 0
+          return (origLabel, nodeProb)
         tok = encToken depNodeID
       in
         (prob, tok)
