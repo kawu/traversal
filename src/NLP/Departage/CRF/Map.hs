@@ -123,6 +123,10 @@ class (Pipes.MonadIO prim, PrimMonad prim, Ord k, Flo v) => Map prim map k v whe
   -- | Create from a pure map.
   fromMap :: M.Map k v -> prim (map k v)
 
+  -- | Create an empty map.  By default `fromMap M.empty`.
+  empty :: prim (map k v)
+  empty = fromMap M.empty
+
   -- | Transform the map into a pure key -> value map.
   --
   -- The default implementation relies on `toList` and uses an intermediate

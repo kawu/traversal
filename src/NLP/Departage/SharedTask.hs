@@ -340,6 +340,15 @@ data Feat mwe
     { currTag :: mwe
     , currLemma :: T.Text
     }
+  | BinaryUnordLemma
+    { fstTag :: mwe
+    , sndTag :: mwe
+    , fstLemma :: T.Text
+    , sndLemma :: T.Text
+    }
+    -- ^ Binary feature which can refer to both parent and sister relation and
+    -- in which the order of elements doesn't matter (i.e. it holds that
+    -- `fstLemma <= sndLemma`).
   deriving (Generic, Read, Show, Eq, Ord)
 
 instance Hashable mwe => Hashable (Feat mwe)
@@ -405,6 +414,18 @@ collectParent options (parTok, parMwe) (curTok, curMwe) =
         , currTag = curMwe
         , currRel = Cupt.deprel curTok
         }
+      Cfg.ParentUnordLemma ->
+        if Cupt.lemma parTok <= Cupt.lemma curTok
+        then BinaryUnordLemma
+             { fstTag   = parMwe
+             , fstLemma = Cupt.lemma parTok
+             , sndTag   = curMwe
+             , sndLemma = Cupt.lemma curTok }
+        else BinaryUnordLemma
+             { sndTag   = parMwe
+             , sndLemma = Cupt.lemma parTok
+             , fstTag   = curMwe
+             , fstLemma = Cupt.lemma curTok }
 
 
 -- | Collect binary sister features.
@@ -449,6 +470,18 @@ collectSister options (sisTok, sisMwe) (curTok, curMwe) =
         , currTag = curMwe
         , currRel = Cupt.deprel curTok
         }
+      Cfg.SisterUnordLemma ->
+        if Cupt.lemma sisTok <= Cupt.lemma curTok
+        then BinaryUnordLemma
+             { fstTag   = sisMwe
+             , fstLemma = Cupt.lemma sisTok
+             , sndTag   = curMwe
+             , sndLemma = Cupt.lemma curTok }
+        else BinaryUnordLemma
+             { sndTag   = sisMwe
+             , sndLemma = Cupt.lemma sisTok
+             , fstTag   = curMwe
+             , fstLemma = Cupt.lemma curTok }
 
 
 ----------------------------------------------

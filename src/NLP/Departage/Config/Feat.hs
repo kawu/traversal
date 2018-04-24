@@ -55,6 +55,7 @@ data ParentOption
   | ParentLemmaCurrent
   | ParentTagsOnly
   | ParentTagsAndDepRel
+  | ParentUnordLemma
   deriving (Generic, Read, Show, Eq, Ord)
 
 instance Interpret ParentOption
@@ -73,6 +74,7 @@ data SisterOption
   | SisterLemmaCurrent
   | SisterTagsOnly
   | SisterTagsAndDepRel
+  | SisterUnordLemma
   deriving (Generic, Read, Show, Eq, Ord)
 
 
