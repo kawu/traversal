@@ -32,6 +32,7 @@ module NLP.Departage.DepTree.Cupt
     -- * Conversion
   , rootParID
   , decorate
+  , preserveOnly
   , abstract
   ) where
 
@@ -94,6 +95,9 @@ data GenToken mwe = Token
 -- | Word index, integer starting at 1 for each new sentence; may be a range for
 -- multiword tokens; may be a decimal number(??? what did I mean???) for empty
 -- nodes.
+--
+-- WARNING: we use `TokIDRange 0 0` as a special value for tokens out of the
+-- selected tokenization (basically it stands for '_').
 data TokID
   = TokID Int
   | TokIDRange Int Int
@@ -160,6 +164,7 @@ parseToken line =
 
 
 parseTokID :: T.Text -> TokID
+parseTokID "_" = TokIDRange 0 0
 parseTokID txt =
   case map (read . T.unpack) . T.split (=='-') $ txt of
     [x] -> TokID x
@@ -234,6 +239,8 @@ renderTokID tid =
   case tid of
     TokID x ->
       psh x
+    TokIDRange 0 0 ->
+      "_"
     TokIDRange x y ->
       L.intercalate "-" [psh x, psh y]
   where
@@ -305,6 +312,15 @@ decorate =
       case mweTyp of
         Nothing  -> (typMap, (mweID, typMap M.! mweID))
         Just typ -> (M.insert mweID typ typMap, (mweID, typ))
+
+
+-- | Preserve only selected MWE annotations.
+preserveOnly :: MweTyp -> Sent -> Sent
+preserveOnly mweTyp =
+  map update
+  where
+    update tok = tok {mwe = filter preserve (mwe tok)}
+    preserve (_, typ) = typ == mweTyp
 
 
 -- | Inverse of `decorate`. TODO: actually, does not work like that yet, but

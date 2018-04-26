@@ -52,7 +52,7 @@ library
       , NLP.Departage.DepTree.Cupt
       , NLP.Departage.Parser.Item
       , NLP.Departage.Parser.Arc
-      -- , NLP.Departage.Parser.BottomUp
+      , NLP.Departage.Parser.BottomUp
       , NLP.Departage.Hype
       , NLP.Departage.CRF
       , NLP.Departage.CRF.Map
@@ -60,6 +60,7 @@ library
       , NLP.Departage.CRF.SGD
       , NLP.Departage.CRF.SGD.Dataset
       , NLP.Departage.Prob
+      , NLP.Departage.Core
       , NLP.Departage.SharedTask
       , NLP.Departage.FeatConfig
       , NLP.Departage.Model

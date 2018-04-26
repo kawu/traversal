@@ -12,16 +12,19 @@ module NLP.Departage.SharedTask
   ( MWE
   , ParaMap
   , encodeCupt
-  , decodeCupt
+  -- , decodeCupt
   , encodeTypeAmbiguity
   , retrieveTypes
   -- , retrieveTypes'
-  , train
+  , trainSimple
+  , trainEnsemble
   , TagConfig(..)
-  , tagFile
+  , tagEnsemble
+  , tagSimple
 
   -- * Utils
   , liftCase
+  , removeMweAnnotations
   , readDataWith
   ) where
 
@@ -29,7 +32,7 @@ module NLP.Departage.SharedTask
 import           GHC.Generics (Generic)
 
 import           Control.Applicative ((<|>))
-import           Control.Monad (guard)
+import           Control.Monad (guard, forM_, forM, when, unless)
 import           Control.Monad.IO.Class (liftIO)
 import qualified Control.Monad.State.Strict as State
 -- import qualified Pipes as Pipes
@@ -38,11 +41,14 @@ import           System.IO (hSetBuffering, stdout, BufferMode (..))
 
 import           Data.Ord (comparing)
 import           Data.Maybe (listToMaybe, maybeToList, mapMaybe)
+import qualified Data.Foldable as Fold
+import           Data.Semigroup (Max(..))
 import qualified Data.List as L
 import qualified Data.Tree as R
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Text.Lazy.IO as LT
 import           Data.Hashable (Hashable)
 -- import qualified Data.HashMap.Strict as HM
 
@@ -62,20 +68,14 @@ import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Departage.CRF.Map as Map
 import qualified NLP.Departage.CRF.Mame as Mame
 
+import           NLP.Departage.Core (MWE, Feat(..), ParaMap)
+
 -- import qualified NLP.Departage.FeatConfig as Cfg
 import qualified NLP.Departage.Config as Cfg
 import qualified NLP.Departage.Config.Feat as Cfg
+import qualified NLP.Departage.Model as Model
 
 import Debug.Trace (trace)
-
-
-----------------------------------------------
--- Basic Types
-----------------------------------------------
-
-
--- | Information about MWE
-type MWE = Bool
 
 
 ----------------------------------------------
@@ -125,39 +125,41 @@ encodeCupt toks0 =
     toks = filter Cupt.chosen toks0
 
 
--- | Decode a Cupt sentence from a dependency tree.
-decodeCupt :: AH.DepTree MWE Cupt.Token -> Cupt.Sent
-decodeCupt =
-  L.sortBy (comparing position) . R.flatten . fmap decodeTok
-  where
-    position tok = case Cupt.tokID tok of
-      Cupt.TokID x -> (x, -1)
-      Cupt.TokIDRange x y -> (x, x - y)
-    decodeTok (prob, tok) =
-      case M.lookup True (P.unProb prob) of
-        Just p  ->
-          if p > 0.5
-          then tok {Cupt.mwe = [(1, T.pack $ "MWE:" ++ show p)]}
-          else tok {Cupt.mwe = []}
-        Nothing -> tok {Cupt.mwe = []}
---       case M.lookupMax (P.unProb prob) of
---         Just (True, _) -> tok {Cupt.mwe = [(0, Just "MWE")]}
---         _ -> tok {Cupt.mwe = []}
-
-
--- | Decode a Cupt sentence from a dependency tree.
-decodeCupt' :: AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token -> Cupt.Sent
-decodeCupt' =
-  -- L.sortBy (comparing position) . R.flatten . fmap decodeTok
-  L.sortBy (comparing position) . concatMap R.flatten . flip State.evalState 1 . decodeTree
-  where
-    position tok = case Cupt.tokID tok of
-      Cupt.TokID x -> (x, -1)
-      Cupt.TokIDRange x y -> (x, x - y)
+-- -- | Decode a Cupt sentence from a dependency tree.
+-- decodeCupt :: AH.DepTree MWE Cupt.Token -> Cupt.Sent
+-- decodeCupt =
+--   L.sortBy (comparing position) . R.flatten . fmap decodeTok
+--   where
+--     position tok = case Cupt.tokID tok of
+--       Cupt.TokID x -> (x, -1)
+--       Cupt.TokIDRange x y -> (x, x - y)
 --     decodeTok (prob, tok) =
---       case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
---         Just (Just typ, _) -> tok {Cupt.mwe = [(0, typ)]}
---         _ -> tok {Cupt.mwe = []}
+--       case M.lookup True (P.unProb prob) of
+--         Just p  ->
+--           if p > 0.5
+--           then tok {Cupt.mwe = [(1, T.pack $ "MWE:" ++ show p)]}
+--           else tok {Cupt.mwe = []}
+--         Nothing -> tok {Cupt.mwe = []}
+-- --       case M.lookupMax (P.unProb prob) of
+-- --         Just (True, _) -> tok {Cupt.mwe = [(0, Just "MWE")]}
+-- --         _ -> tok {Cupt.mwe = []}
+
+
+-- | Decode a Cupt sentence from a dependency tree.
+-- Does not overwrite the existing annotations.
+decodeCupt
+  :: AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token
+  -> Cupt.Sent
+decodeCupt inputTree
+  = L.sortBy (comparing position)
+  . concatMap R.flatten
+  . flip State.evalState (maxMweID inputTree + 1)
+  . decodeTree
+  $ inputTree
+  where
+    position tok = case Cupt.tokID tok of
+      Cupt.TokID x -> (x, -1)
+      Cupt.TokIDRange x y -> (x, x - y)
     decodeTree tree = decode Nothing Nothing [tree]
     decode _ _ [] = return []
     decode parent sister (tree : forest) = do
@@ -168,16 +170,18 @@ decodeCupt' =
           mwe <- case withPrev parent typ <|> withPrev sister typ of
             Nothing -> withNewID typ
             Just x  -> return x
-              -- root' = tok {Cupt.mwe = [(0, typ)]}
           subTrees' <- decode (Just mwe) Nothing   subTrees
           forest'   <- decode  parent   (Just mwe) forest
-          let root' = tok {Cupt.mwe = [mwe]}
+          -- let root' = tok {Cupt.mwe = [mwe]}
+          -- DO NOT OVERWRITE ANNOTATION!
+          let root' = tok {Cupt.mwe = mwe : Cupt.mwe tok}
               tree' = R.Node root' subTrees'
           return $ tree' : forest'
         _ -> do
           subTrees' <- decode Nothing Nothing subTrees
           forest'   <- decode parent  Nothing forest
-          let root' = tok {Cupt.mwe = []}
+          -- let root' = tok {Cupt.mwe = []}
+          let root' = tok -- DO NOT OVERWRITE ANNOTATION!
               tree' = R.Node root' subTrees'
           return $ tree' : forest'
     withPrev prev typ = do
@@ -188,6 +192,16 @@ decodeCupt' =
       k <- State.get
       State.put (k+1)
       return (k, typ)
+
+
+-- | Determine the maximum mwe ID present in the given tree.
+maxMweID :: AH.DepTree mwe Cupt.Token -> Int
+maxMweID =
+  getMax . Fold.foldMap (mweID . snd)
+  where
+    mweID tok = case Cupt.mwe tok of
+      [] -> Max 0
+      xs -> Max . maximum $ map fst xs
 
 
 
@@ -259,101 +273,6 @@ retrieveTypes =
 --     return tag
 
 
-----------------------------------------------
--- Features
-----------------------------------------------
-
-
--- | CRF feature type. TODO: somehow add info about dependency labels.
-data Feat mwe
-  = ParentOrth
-    { parentTag :: mwe
-    , currTag :: mwe
-    , parentOrth :: T.Text
-    , currOrth :: T.Text
-    }
-  | ParentLemma
-    { parentTag :: mwe
-    , currTag :: mwe
-    , parentLemma :: T.Text
-    , currLemma :: T.Text
-    }
-  | ParentLemmaParent
-    { parentTag :: mwe
-    , currTag :: mwe
-    , parentLemma :: T.Text
-    }
-  | ParentLemmaCurrent
-    { parentTag :: mwe
-    , currTag :: mwe
-    , currLemma :: T.Text
-    }
-  | ParentTagsOnly
-    { parentTag :: mwe
-    , currTag :: mwe
-    }
-  | ParentTagsAndDepRel
-    { parentTag :: mwe
-    , currTag :: mwe
-    , currRel :: T.Text
-      -- ^ Dependency type of the arc between the node and its parent
-    }
-  | SisterOrth
-    { prevTag :: mwe
-    , currTag :: mwe
-    , prevOrth :: T.Text
-    , currOrth :: T.Text
-    }
-  | SisterLemma
-    { prevTag :: mwe
-    , currTag :: mwe
-    , prevLemma :: T.Text
-    , currLemma :: T.Text
-    }
-  | SisterLemmaSister
-    { prevTag :: mwe
-    , currTag :: mwe
-    , prevLemma :: T.Text
-    }
-  | SisterLemmaCurrent
-    { prevTag :: mwe
-    , currTag :: mwe
-    , currLemma :: T.Text
-    }
-  | SisterTagsOnly
-    { prevTag :: mwe
-    , currTag :: mwe
-    }
-  | SisterTagsAndDepRel
-    { prevTag :: mwe
-    , currTag :: mwe
-    , prevRel :: T.Text
-      -- ^ Dependency type of the arc between the sister node and its parent
-    , currRel :: T.Text
-      -- ^ Dependency type of the arc between the current node and its parent
-    }
-  | UnaryOrth
-    { currTag :: mwe
-    , currOrth :: T.Text
-    }
-  | UnaryLemma
-    { currTag :: mwe
-    , currLemma :: T.Text
-    }
-  | BinaryUnordLemma
-    { fstTag :: mwe
-    , sndTag :: mwe
-    , fstLemma :: T.Text
-    , sndLemma :: T.Text
-    }
-    -- ^ Binary feature which can refer to both parent and sister relation and
-    -- in which the order of elements doesn't matter (i.e. it holds that
-    -- `fstLemma <= sndLemma`).
-  deriving (Generic, Read, Show, Eq, Ord)
-
-instance Hashable mwe => Hashable (Feat mwe)
-
-
 -- | Collect unary features for a given token/MWE pair.
 collectUnary
   :: S.Set Cfg.UnaryOption
@@ -370,6 +289,14 @@ collectUnary options (tok, mwe) =
       Cfg.UnaryLemma -> UnaryLemma
         { currTag = mwe
         , currLemma = Cupt.lemma tok
+        }
+      Cfg.UnaryPos -> UnaryPos
+        { currTag = mwe
+        , currPos = Cupt.upos tok
+        }
+      Cfg.UnaryDepRel -> UnaryDepRel
+        { currTag = mwe
+        , currRel = Cupt.deprel tok
         }
 
 
@@ -570,11 +497,6 @@ mkElem cfg encoded =
 ----------------------------------------------
 
 
--- | A particular CRF model (IO embedded parameter map).
-type ParaMap mwe = Map.IndiMap IO (Feat mwe) Double
--- type ParaMap mwe = Map.RefMap IO (Feat mwe) Double
-
-
 {-# SPECIALIZE sgd :: (Ord mwe, Hashable mwe) => SGD.SgdArgs -> (Int -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO ()) -> (Map.IndiMap IO (Feat mwe) Double -> [AH.DepTree mwe Cupt.Token] -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO ()) -> SGD.Dataset.Dataset (AH.DepTree mwe Cupt.Token) -> Map.IndiMap IO (Feat mwe) Double -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO () #-}
 
 {-# SPECIALIZE gradOn :: (Ord mwe, Hashable mwe) => [(CRF.Elem (Feat mwe) F.LogFloat, H.Arc -> F.LogFloat)] -> Map.IndiMap IO (Feat mwe) Double -> Mame.Mame (Map.IndiMap IO) (Feat mwe) F.LogFloat IO () #-}
@@ -694,6 +616,76 @@ train cfg sgdArgsT trainData devData = do
   return paraMap
 
 
+-- | Train an ensemble MWE recognition model.
+trainEnsemble
+  :: Cfg.Config
+  -> FilePath          -- ^ Training data
+  -> Maybe FilePath    -- ^ Development data
+  -> IO Model.EnsembleModel
+trainEnsemble config trainPath devPath = do
+
+  putStrLn "# Basic model"
+  let readData = readDataWith config Nothing . Just
+  trainData <- readData trainPath
+  devData   <- case devPath of
+    Nothing -> return []
+    Just path -> readData path
+  paraMap <- train (Cfg.baseFeatConfig config) sgdCfg trainData devData
+
+  putStrLn "# MWE identification model"
+  typSet <- retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
+  let readDataMWE
+        = fmap (map (encodeTypeAmbiguity typSet))
+        . readDataWith config Nothing . Just
+  trainDataMWE <- readDataMWE trainPath
+  devDataMWE <- case devPath of
+    Nothing -> return []
+    Just path -> readDataMWE path
+  paraMapMWE <- train (Cfg.mweFeatConfig config) sgdCfg trainDataMWE devDataMWE
+
+  return $ Model.EnsembleModel
+    { Model.paraMapBase = paraMap
+    , Model.paraMapMwe = paraMapMWE
+    , Model.mweTypSet = typSet
+    }
+
+
+-- | Train a separate recognition model for a given MWE type.
+trainSimple
+  :: Cfg.Config
+  -> Cupt.MweTyp       -- ^ Selected type
+  -> FilePath          -- ^ Training data
+  -> Maybe FilePath    -- ^ Development data
+  -> IO Model.SimpleModel
+trainSimple config mweTyp trainPath devPath = do
+
+  putStrLn "# Identify MWE types"
+  typSet <- retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
+
+  unless (S.member mweTyp typSet) $ do
+    error "Provided type not in the set of available types!"
+
+  putStrLn $ "# Training model for: " ++ T.unpack mweTyp
+  let readData = readDataWith config (Just mweTyp) . Just
+  trainData <- readData trainPath
+  devData   <- case devPath of
+    Nothing -> return []
+    Just path -> readData path
+  train (Cfg.baseFeatConfig config) sgdCfg trainData devData
+
+
+-- | Default SGD configuration.
+sgdCfg :: SGD.SgdArgs
+sgdCfg = SGD.sgdArgsDefault
+  { SGD.iterNum=20
+  , SGD.regVar=10.0
+  , SGD.gamma=0.9
+  , SGD.tau=5
+  , SGD.gain0=0.1
+  , SGD.batchSize=30
+  }
+
+
 ----------------------------------------------
 -- Tagging
 ----------------------------------------------
@@ -749,10 +741,6 @@ tagMany cfg tagCfg paraMap depTrees = do
   featSet <- M.keysSet <$> Map.toMap paraMap
   let featMap () = M.fromList . map (,0) $ S.toList featSet
       makeBuff = Mame.Make
-        -- { Mame.mkValueBuffer = Map.newRefMap M.empty
-        -- , Mame.mkDoubleBuffer = Map.newRefMap M.empty
-        -- { Mame.mkValueBuffer = Map.newIndiMap $ Map.indiSet paraMap
-        -- , Mame.mkDoubleBuffer = Map.newIndiMap $ Map.indiSet paraMap
         { Mame.mkValueBuffer = Map.fromMap $ featMap ()
         , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
         }
@@ -760,51 +748,73 @@ tagMany cfg tagCfg paraMap depTrees = do
     mapM (tagOne cfg tagCfg paraMap) depTrees
 
 
--- -- | High-level tagging function.
--- tagFile
---   :: (ParaMap MWE)
+-- | High-level tagging function.
+tagEnsemble
+  :: Cfg.Config
+  -> TagConfig
+  -> Model.EnsembleModel
 --   -> FilePath -- ^ Input file
 --   -> FilePath -- ^ Output file
---   -> IO ()
--- tagFile paraMap inpFile outFile = do
---   xs <- mapMaybe encodeCupt <$> Cupt.readCupt inpFile
---   ys <- tagMany paraMap xs
---   Cupt.writeCupt (map decodeCupt ys) outFile
+  -> IO ()
+tagEnsemble config tagConfig model = do -- inpFile outFile = do
+  xs <- readDataWith config Nothing Nothing -- inpFile
+  ys <- map (encodeTypeAmbiguity $ Model.mweTypSet model)
+    <$> tagMany (Cfg.baseFeatConfig config) tagConfig (Model.paraMapBase model) xs
+  zs <- tagMany (Cfg.mweFeatConfig  config) tagConfig (Model.paraMapMwe model) ys
+  LT.putStrLn $ Cupt.renderCupt (map (Cupt.abstract . decodeCupt) zs) -- outFile
 
 
 -- | High-level tagging function.
-tagFile
-  :: S.Set Cupt.MweTyp
-  -> Cfg.Config
+tagSimple
+  :: Cfg.Config
   -> TagConfig
-  -> ParaMap MWE
-  -> ParaMap (Maybe Cupt.MweTyp)
-  -> FilePath -- ^ Input file
-  -> FilePath -- ^ Output file
+  -> Cupt.MweTyp
+              -- ^ MWE type to focus on
+  -> Model.SimpleModel
+--   -> FilePath -- ^ Input file
+--   -> FilePath -- ^ Output file
   -> IO ()
-tagFile typSet config tagConfig paraMap paraMap' inpFile outFile = do
-  -- xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
-  xs <- readDataWith config inpFile
-  ys <- map (encodeTypeAmbiguity typSet)
-    <$> tagMany (Cfg.baseFeatConfig config) tagConfig paraMap  xs
-  zs <- tagMany (Cfg.mweFeatConfig  config) tagConfig paraMap' ys
-  Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
+tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
+  xs <- readDataWith config Nothing Nothing -- inpFile
+  ys <- map (fmap addType)
+    <$> tagMany (Cfg.baseFeatConfig config) tagConfig model xs
+  LT.putStrLn . Cupt.renderCupt $ map (Cupt.abstract . decodeCupt) ys -- outFile
+  where
+    addType (probMap, tok) = (,tok) . P.fromList $ do
+      (mwe, prob) <- P.toList probMap
+      return $
+        if mwe
+        then (Just mweTyp, prob)
+        else (Nothing, prob)
 
 
--- -- | High-level tagging function.
--- tagFile
---   :: S.Set Cupt.MweTyp
---   -> Cfg.FeatConfig
---   -> ParaMap MWE
---   -> ParaMap (Maybe Cupt.MweTyp)
+-- -- | High-level tagging function with separate models.
+-- tagSeparate
+--   :: Cfg.Config
+--   -> TagConfig
+--   -> Model.SeparateModel
 --   -> FilePath -- ^ Input file
 --   -> FilePath -- ^ Output file
 --   -> IO ()
--- tagFile typSet cfg paraMap paraMap' inpFile outFile = do
---   xs <- mapMaybe (encodeCupt . Cupt.decorate) <$> Cupt.readCupt inpFile
---   ys <- map (encodeTypeAmbiguity typSet) <$> tagMany cfg paraMap xs
---   zs <- tagMany cfg paraMap' ys
---   Cupt.writeCupt (map (Cupt.abstract . decodeCupt') zs) outFile
+-- tagSeparate config tagConfig model inpFile outFile = do
+--   xs <- readDataWith config Nothing inpFile
+--
+--   let tagger = tagWithMany $ do
+--         mweTyp <- S.toList $ Model.mweTypSet model
+--         let paraMap = Model.paraMaps model M.! mweTyp
+--         return $ tagMany (Cfg.baseFeatConfig config) tagConfig
+--
+--   ys <- map (encodeTypeAmbiguity $ Model.mweTypSet model)
+--     <$> tagMany (Cfg.baseFeatConfig config) tagConfig (Model.paraMapBase model)  xs
+--   zs <- tagMany (Cfg.mweFeatConfig  config) tagConfig (Model.paraMapMwe model) ys
+--   Cupt.writeCupt (map (Cupt.abstract . decodeCupt) zs) outFile
+--
+--   where
+--
+--     tagWithMany taggers xs =
+--       case taggers of
+--         [] -> xs
+--         tag : rest -> foldThem rest (tag xs)
 
 
 ----------------------------------------------
@@ -812,19 +822,32 @@ tagFile typSet config tagConfig paraMap paraMap' inpFile outFile = do
 ----------------------------------------------
 
 
--- | Read Cupt data from a given file.
+-- | Read Cupt data from a given file (or <stdin> if `Nothing`).
 readDataWith
   :: Cfg.Config
-  -> FilePath
+  -> Maybe Cupt.MweTyp
+    -- ^ Ignore MWEs of all other types (if supplied)
+  -> Maybe FilePath
   -> IO [AH.DepTree MWE Cupt.Token]
-readDataWith config
-  = fmap (mapMaybe $ encodeCupt . Cupt.decorate . handleCase)
-  . Cupt.readCupt
+readDataWith config mayMweTyp mayPath
+  = fmap ( mapMaybe
+           $ encodeCupt
+           . discardOtherMWEs
+           . Cupt.decorate
+           . handleCase
+         )
+  $ case mayPath of
+      Just path -> Cupt.readCupt path
+      Nothing -> Cupt.parseCupt <$> LT.getContents
   where
     handleCase =
       if Cfg.liftCase config
       then liftCase
       else id
+    discardOtherMWEs =
+      case mayMweTyp of
+        Nothing -> id
+        Just mweTyp -> Cupt.preserveOnly mweTyp
 
 
 -- | Lift tokens satisfying the given predicate to a higher level (i.e., they
@@ -850,3 +873,7 @@ liftToks tokPred sent =
 liftCase :: Cupt.GenSent mwe -> Cupt.GenSent mwe
 liftCase = liftToks $ \tok -> Cupt.deprel tok == "case"
 
+
+-- | Clear all MWE annotations.
+removeMweAnnotations :: Cupt.GenSent mwe -> Cupt.GenSent mwe
+removeMweAnnotations = map $ \tok -> tok {Cupt.mwe = []}

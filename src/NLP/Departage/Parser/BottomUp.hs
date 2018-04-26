@@ -65,7 +65,8 @@ type Pos = Int
 -- | Node/item type
 data Typ
   = L
-    -- ^ Head on the left
+    -- ^ Head on the left (equivalently, left node is active, i.e., it still
+    -- needs a parent)
   | R
     -- ^ Head on the right
   | B
@@ -315,7 +316,7 @@ arcs nodeSet =
           -- return [node R i k, node B k j]
           return [(i, k, R), (k, j, B)]
 
-    -- Right (i <= j)
+    -- Top (i <= j)
     top i j h =
       return [(i, h, R), (h, j, L)]
 

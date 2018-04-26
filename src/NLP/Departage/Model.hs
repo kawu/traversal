@@ -2,24 +2,45 @@
 
 
 module NLP.Departage.Model
-  ( Model (..)
-  , save
-  , load
+  ( EnsembleModel (..)
+  , saveEnsemble
+  , loadEnsemble
+
+  , SimpleModel (..)
+  , saveSimple
+  , loadSimple
   ) where
 
 
 import           System.FilePath ((</>))
+import           Control.Monad (forM_)
 
+import qualified Data.Text as T
 import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 
 import qualified NLP.Departage.CRF.Map as Map
-import qualified NLP.Departage.SharedTask as Task
+import qualified NLP.Departage.Core as Core
 import qualified NLP.Departage.DepTree.Cupt as Cupt
 
 
-data Model = Model
-  { paraMapBase :: Task.ParaMap Task.MWE
-  , paraMapMwe :: Task.ParaMap (Maybe Cupt.MweTyp)
+----------------------------------------------
+-- Core
+----------------------------------------------
+
+
+typPath :: FilePath
+typPath = "typ.list"
+
+
+----------------------------------------------
+-- Ensemble
+----------------------------------------------
+
+
+data EnsembleModel = EnsembleModel
+  { paraMapBase :: Core.ParaMap Core.MWE
+  , paraMapMwe :: Core.ParaMap (Maybe Cupt.MweTyp)
   , mweTypSet :: S.Set Cupt.MweTyp
   }
 
@@ -32,24 +53,55 @@ mwePath :: FilePath
 mwePath = "mwe.model"
 
 
-typPath :: FilePath
-typPath = "typ.list"
-
-
 -- | Save model in the given directory.
-save :: Model -> FilePath -> IO ()
-save Model{..} dirPath = do
+saveEnsemble :: EnsembleModel -> FilePath -> IO ()
+saveEnsemble EnsembleModel{..} dirPath = do
   Map.save keyEnc paraMapBase (dirPath </> basePath)
   Map.save keyEnc paraMapMwe  (dirPath </> mwePath)
   writeFile (dirPath </> typPath) (show mweTypSet)
 
 
 -- | Load model from the given directory.
-load :: FilePath -> IO Model
-load dirPath = Model
+loadEnsemble :: FilePath -> IO EnsembleModel
+loadEnsemble dirPath = EnsembleModel
   <$> Map.load keyEnc (dirPath </> basePath)
   <*> Map.load keyEnc (dirPath </> mwePath)
   <*> (read <$> readFile (dirPath </> typPath))
+
+
+----------------------------------------------
+-- Separate
+----------------------------------------------
+
+
+type SimpleModel = Core.ParaMap Core.MWE
+
+
+-- elemPath :: T.Text -> FilePath
+-- elemPath elem = T.unpack elem ++ ".model"
+
+
+-- | Save simple model in the given file.
+saveSimple :: SimpleModel -> FilePath -> IO ()
+saveSimple paraMap filePath = Map.save keyEnc paraMap filePath
+
+
+-- | Load simple model from the given directory.
+loadSimple :: FilePath -> IO SimpleModel
+loadSimple filePath = Map.load keyEnc filePath
+
+
+-- -- | Load model from the given directory.
+-- loadEnsemble :: FilePath -> IO EnsembleModel
+-- loadEnsemble dirPath = EnsembleModel
+--   <$> Map.load keyEnc (dirPath </> basePath)
+--   <*> Map.load keyEnc (dirPath </> mwePath)
+--   <*> (read <$> readFile (dirPath </> typPath))
+
+
+----------------------------------------------
+-- Utils
+----------------------------------------------
 
 
 keyEnc :: (Show a, Read a) => Map.Encoding a

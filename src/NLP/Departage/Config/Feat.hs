@@ -37,6 +37,11 @@ data UnaryOption
   = UnaryOrth
     -- ^ Standard unary (orth, mwe) pair
   | UnaryLemma
+    -- ^ (lemma, mwe)
+  | UnaryPos
+    -- ^ (POS, mwe)
+  | UnaryDepRel
+    -- ^ (parent dependency relation, mwe)
   deriving (Generic, Read, Show, Eq, Ord)
 
 instance Interpret UnaryOption
