@@ -19,10 +19,9 @@ data Config = Config
   { baseFeatConfig :: Feat.FeatConfig
   , mweFeatConfig :: Feat.FeatConfig
   , liftCase :: Bool
---   , oneModelPerMweTyp :: Bool
---     -- ^ Train separate models for the individual MWE types. This may be
---     -- reasonable because in the shared task words can be annotated with many
---     -- MWEs at the same time.
+  , sequential :: Bool
+    -- ^ Use sequential encoding (e.g. to make the tagger robust to dependency
+    -- parsing errors).
   } deriving (Generic, Show)
 
 instance Interpret Config

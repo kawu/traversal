@@ -6,6 +6,7 @@ module NLP.Departage.Config.Feat
   , UnaryOption(..)
   , ParentOption(..)
   , SisterOption(..)
+  , GrandpaOption(..)
   , Set(..)
   ) where
 
@@ -22,6 +23,7 @@ data FeatConfig = FeatConfig
   { unaryOptions :: Set UnaryOption
   , parentOptions :: Set ParentOption
   , sisterOptions :: Set SisterOption
+  , grandpaOptions :: Set GrandpaOption
   } deriving (Generic, Show, Eq, Ord)
 
 
@@ -56,11 +58,27 @@ data ParentOption
   = ParentOrth
     -- ^ Standard (orth, mwe) pair for parent and child
   | ParentLemma
+    -- ^ MWE tags and lemmas of the node and its parent
   | ParentLemmaParent
+    -- ^ MWE tags of the node and its parent, lemma of the parent
   | ParentLemmaCurrent
+    -- ^ MWE tags of the node and its parent, lemma of the node
+  | ParentLemmaParentPosCurrentDepRel
+    -- ^ MWE tags of the node and its parent;
+    -- lemma of the parent;
+    -- pos of the node (child);
+    -- dependency relation between the two
+  | ParentLemmaCurrentPosParentDepRel
+    -- ^ MWE tags of the node and its parent;
+    -- lemma of the node;
+    -- pos of the parent;
+    -- dependency relation between the two
   | ParentTagsOnly
+    -- ^ MWE tags of the node and its parent
   | ParentTagsAndDepRel
+    -- ^ MWE tags of the node and its grandpa + deprel between the two
   | ParentUnordLemma
+    -- ^ MWE tags and lemmas of the node and its parent, unordered
   deriving (Generic, Read, Show, Eq, Ord)
 
 instance Interpret ParentOption
@@ -75,6 +93,14 @@ data SisterOption
   = SisterOrth
     -- ^ Standard (orth, mwe) pair for sisters
   | SisterLemma
+  | SisterLemmaSisterPosCurrent
+    -- ^ MWE tags of the node and its sister;
+    -- lemma of the sister;
+    -- pos of the node;
+  | SisterLemmaCurrentPosSister
+    -- ^ MWE tags of the node and its sister;
+    -- lemma of the node;
+    -- pos of the sister;
   | SisterLemmaSister
   | SisterLemmaCurrent
   | SisterTagsOnly
@@ -87,6 +113,30 @@ instance Interpret SisterOption
 
 instance JSON.FromJSON SisterOption
 instance JSON.ToJSON SisterOption where
+  toEncoding = JSON.genericToEncoding JSON.defaultOptions
+
+
+-- | Types of binary granpa/child options.
+data GrandpaOption
+  = GrandpaOrth
+    -- ^ MWE tags and orthographic forms of both the node and its grandpa
+  | GrandpaLemma
+    -- ^ MWE tags and lemmas of the node and its grandpa
+  | GrandpaTagsOnly
+    -- ^ MWE tags of the node and its grandpa
+  | GrandpaTagsAndDepRel
+    -- ^ MWE tags of the node and its grandpa + deprel of the node (but not its
+    -- parent! TODO: change this?)
+  | GrandpaUnordLemma
+    -- ^ MWE tags and lemmas of the node and its grandpa, unordered
+    -- TODO: probably not a good idea to use it, since it mixes adjacent with
+    -- non-adjacent lemma pairs.
+  deriving (Generic, Read, Show, Eq, Ord)
+
+instance Interpret GrandpaOption
+
+instance JSON.FromJSON GrandpaOption
+instance JSON.ToJSON GrandpaOption where
   toEncoding = JSON.genericToEncoding JSON.defaultOptions
 
 

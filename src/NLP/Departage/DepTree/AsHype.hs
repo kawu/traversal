@@ -62,21 +62,6 @@ import qualified NLP.Departage.Prob as P
 type DepTree a b = R.Tree (P.Prob a, b)
 
 
--- -- | Encoding result.
--- data EncHype a b = EncHype
---   { encHype :: Hype.Hype
---     -- ^ The actually encoded hypergraph
---   , arcProb :: Hype.Arc -> Double
---     -- ^ Arc probabilities
---   , nodeLabel :: Hype.Node -> (Label a, b)
---     -- ^ A label assigned to a hypernode corresponds to (i) enriched original
---     -- node label, and (ii) the original label assigned to the token/arc between
---     -- the node and its parent.
---   , nodeParent :: Hype.Node -> Maybe b
---     -- ^ Original token/arc label assigned to node's parent
---   }
-
-
 -- | Encoding result.  New, alternative form.
 data EncHype a b = EncHype
   { encTree :: R.Tree DepNodeID

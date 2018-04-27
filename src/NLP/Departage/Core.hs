@@ -44,6 +44,20 @@ data Feat mwe
     , parentLemma :: T.Text
     , currLemma :: T.Text
     }
+  | ParentLemmaParentPosCurrentDepRel
+    { parentTag :: mwe
+    , currTag :: mwe
+    , parentLemma :: T.Text
+    , currPos :: T.Text
+    , currRel :: T.Text
+    }
+  | ParentLemmaCurrentPosParentDepRel
+    { parentTag :: mwe
+    , currTag :: mwe
+    , parentPos :: T.Text
+    , currLemma :: T.Text
+    , currRel :: T.Text
+    }
   | ParentLemmaParent
     { parentTag :: mwe
     , currTag :: mwe
@@ -76,6 +90,18 @@ data Feat mwe
     , prevLemma :: T.Text
     , currLemma :: T.Text
     }
+  | SisterLemmaSisterPosCurrent
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevLemma :: T.Text
+    , currPos :: T.Text
+    }
+  | SisterLemmaCurrentPosSister
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevPos :: T.Text
+    , currLemma :: T.Text
+    }
   | SisterLemmaSister
     { prevTag :: mwe
     , currTag :: mwe
@@ -97,6 +123,27 @@ data Feat mwe
       -- ^ Dependency type of the arc between the sister node and its parent
     , currRel :: T.Text
       -- ^ Dependency type of the arc between the current node and its parent
+    }
+  | GrandpaOrth
+    { granTag :: mwe
+    , currTag :: mwe
+    , granOrth :: T.Text
+    , currOrth :: T.Text
+    }
+  | GrandpaLemma
+    { granTag :: mwe
+    , currTag :: mwe
+    , granLemma :: T.Text
+    , currLemma :: T.Text
+    }
+  | GrandpaTagsOnly
+    { granTag :: mwe
+    , currTag :: mwe
+    }
+  | GrandpaTagsAndDepRel
+    { granTag :: mwe
+    , currTag :: mwe
+    , currRel :: T.Text
     }
   | UnaryOrth
     { currTag :: mwe
@@ -124,6 +171,20 @@ data Feat mwe
     -- ^ Binary feature which can refer to both parent and sister relation and
     -- in which the order of elements doesn't matter (i.e. it holds that
     -- `fstLemma <= sndLemma`).
+  | BinaryTagsOnly
+    { prevTag :: mwe
+      -- ^ Tag corresponding to the previous node (sister or parent)
+    , currTag :: mwe
+      -- ^ Tag corresponding to the current node (sister or parent)
+    }
+  | BinaryTagsAndDepRel
+    { prevTag :: mwe
+    , currTag :: mwe
+    , prevRel :: T.Text
+      -- ^ Dependency type of the arc between the previous node and its parent
+    , currRel :: T.Text
+      -- ^ Dependency type of the arc between the current node and its parent
+    }
   deriving (Generic, Read, Show, Eq, Ord)
 
 instance Hashable mwe => Hashable (Feat mwe)
