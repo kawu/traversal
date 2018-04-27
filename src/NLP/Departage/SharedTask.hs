@@ -981,16 +981,18 @@ readDataWith config mayMweTyp mayPath
            $ encodeIt
            . discardOtherMWEs
            . Cupt.decorate
-           . handleCase
+           -- . handleCase
          )
   $ case mayPath of
       Just path -> Cupt.readCupt path
       Nothing -> Cupt.parseCupt <$> LT.getContents
   where
-    handleCase =
-      if Cfg.liftCase config
-      then liftCase
-      else id
+    -- TODO: Cannot be done here when simple models are used!
+    -- Probably even with the ensemble model this is wrong!
+    -- handleCase =
+    --   if Cfg.liftCase config
+    --   then liftCase
+    --   else id
     discardOtherMWEs =
       case mayMweTyp of
         Nothing -> id

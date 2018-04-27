@@ -18,7 +18,12 @@ import qualified NLP.Departage.Config.Feat as Feat
 data Config = Config
   { baseFeatConfig :: Feat.FeatConfig
   , mweFeatConfig :: Feat.FeatConfig
-  , liftCase :: Bool
+
+  -- TODO: Problematic when simple models are used -- each model do the lifting,
+  -- while it should be done only once! Probably even with the ensemble model
+  -- this is wrong!
+  -- , liftCase :: Bool
+
   , sequential :: Bool
     -- ^ Use sequential encoding (e.g. to make the tagger robust to dependency
     -- parsing errors).
