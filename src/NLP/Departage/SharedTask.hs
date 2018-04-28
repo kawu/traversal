@@ -25,6 +25,7 @@ module NLP.Departage.SharedTask
   -- * Utils
   , liftCase
   , removeMweAnnotations
+  , depRelStats
   , readDataWith
   ) where
 
@@ -1030,3 +1031,12 @@ liftCase = liftToks $ \tok -> Cupt.deprel tok == "case"
 -- | Clear all MWE annotations.
 removeMweAnnotations :: Cupt.GenSent mwe -> Cupt.GenSent mwe
 removeMweAnnotations = map $ \tok -> tok {Cupt.mwe = []}
+
+
+-- | Compute dependency relation statistics.
+depRelStats :: [Cupt.GenSent mwe] -> M.Map Cupt.MweTyp Int
+depRelStats
+  = M.fromListWith (+)
+  . map (,1)
+  . map Cupt.deprel
+  . concat

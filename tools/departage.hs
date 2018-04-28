@@ -3,11 +3,16 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
 
+import           Control.Monad (forM_)
 import           Data.Monoid ((<>))
 import           Options.Applicative
 -- import           Data.Maybe (mapMaybe)
+import           Data.Ord (comparing)
 import           Data.String (fromString)
+import           Data.List (sortBy)
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+-- import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy.IO as TL
 
 import           System.FilePath (isAbsolute, (</>))
@@ -57,6 +62,7 @@ data Command
       }
     | LiftCase
     | Clear
+    | DepStats
 
 
 --------------------------------------------------
@@ -143,6 +149,10 @@ clearOptions :: Parser Command
 clearOptions = pure Clear
 
 
+depStatsOptions :: Parser Command
+depStatsOptions = pure DepStats
+
+
 --------------------------------------------------
 -- Global options
 --------------------------------------------------
@@ -165,6 +175,10 @@ opts = subparser
     <> command "clear"
     (info (helper <*> clearOptions)
       (progDesc "Clear MWE annotations")
+    )
+    <> command "depstats"
+    (info (helper <*> depStatsOptions)
+      (progDesc "Show dependency relation statistics")
     )
   )
 
@@ -270,6 +284,19 @@ run cmd =
       xs <- Cupt.parseCupt <$> TL.getContents
       let ys = map Task.removeMweAnnotations xs
       TL.putStrLn (Cupt.renderCupt ys)
+
+    DepStats -> do
+      xs <- Cupt.parseCupt <$> TL.getContents
+      let statMap = Task.depRelStats xs
+          n = sum (M.elems statMap)
+          statList = sortBy (comparing snd) (M.toList statMap)
+      forM_ (reverse statList) $ \(dep, k) -> do
+        putStr $ T.unpack dep
+        putStr ":\t"
+        putStr $ show k
+        putStr "\t("
+        putStr $ show (fromIntegral k / fromIntegral n :: Double)
+        putStrLn ")"
 
 
 main :: IO ()
