@@ -183,6 +183,7 @@ parseFeats txt =
       $ txt
   where
     toPair [x, y] = (x, y)
+    toPair [x] = (x, "")
     toPair _ = error "Cupt.parseFeats.toPair: not a pair!"
 
 

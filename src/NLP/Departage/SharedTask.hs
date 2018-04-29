@@ -24,6 +24,8 @@ module NLP.Departage.SharedTask
 
   -- * Utils
   , liftCase
+  , removeDeriv
+  , copyLemma
   , removeMweAnnotations
   , depRelStats
   , readDataWith
@@ -966,7 +968,9 @@ tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
 
 
 ----------------------------------------------
--- Pre-processing
+----------------------------------------------
+-- Pre-processing, utils
+----------------------------------------------
 ----------------------------------------------
 
 
@@ -1004,6 +1008,25 @@ readDataWith config mayMweTyp mayPath
       else encodeCupt
 
 
+-- | Clear all MWE annotations.
+removeMweAnnotations :: Cupt.GenSent mwe -> Cupt.GenSent mwe
+removeMweAnnotations = map $ \tok -> tok {Cupt.mwe = []}
+
+
+-- | Compute dependency relation statistics.
+depRelStats :: [Cupt.GenSent mwe] -> M.Map Cupt.MweTyp Int
+depRelStats
+  = M.fromListWith (+)
+  . map (,1)
+  . map Cupt.deprel
+  . concat
+
+
+----------------------------------------------
+-- Case lifting
+----------------------------------------------
+
+
 -- | Lift tokens satisfying the given predicate to a higher level (i.e., they
 -- get attached to their grandparents).
 liftToks
@@ -1028,15 +1051,57 @@ liftCase :: Cupt.GenSent mwe -> Cupt.GenSent mwe
 liftCase = liftToks $ \tok -> Cupt.deprel tok == "case"
 
 
--- | Clear all MWE annotations.
-removeMweAnnotations :: Cupt.GenSent mwe -> Cupt.GenSent mwe
-removeMweAnnotations = map $ \tok -> tok {Cupt.mwe = []}
+----------------------------------------------
+-- DERIV removal (Turkish)
+----------------------------------------------
 
 
--- | Compute dependency relation statistics.
-depRelStats :: [Cupt.GenSent mwe] -> M.Map Cupt.MweTyp Int
-depRelStats
-  = M.fromListWith (+)
-  . map (,1)
-  . map Cupt.deprel
-  . concat
+-- | Remove the tokens satisfying the given predicate.
+removeToks
+  :: (Cupt.GenToken mwe -> Bool)
+  -> Cupt.GenSent mwe
+  -> Cupt.GenSent mwe
+removeToks tokPred sent
+
+  = map updateTok
+  $ filter (not . tokPred) sent
+
+  where
+
+    updateTok tok = tok {Cupt.dephead = updatePar (Cupt.dephead tok)}
+
+    updatePar parID
+      | toRemove parID = updatePar (parent parID)
+      | otherwise = parID
+
+    toRemove tokID = S.member tokID . S.fromList $ do
+      tok <- sent
+      guard $ tokPred tok
+      return $ Cupt.tokID tok
+
+    parent tokID = maybe (Cupt.TokID 0) id $ M.lookup tokID parMap
+    parMap = M.fromList $ do
+      tok <- sent
+      return (Cupt.tokID tok, Cupt.dephead tok)
+
+
+-- | Apply `removeToks` over tokens which perform deriv function.
+removeDeriv :: Cupt.GenSent mwe -> Cupt.GenSent mwe
+removeDeriv = removeToks $ \tok -> Cupt.deprel tok == "DERIV"
+
+
+----------------------------------------------
+-- Copy lemma from orth (Turkish)
+----------------------------------------------
+
+
+-- | Copy orth to lemma where lemma is not given.
+copyLemma
+  :: Cupt.GenSent mwe
+  -> Cupt.GenSent mwe
+copyLemma =
+  map updateTok
+  where
+    updateTok tok
+      | Cupt.lemma tok == "_" = tok {Cupt.lemma = T.toLower (Cupt.orth tok)}
+      | otherwise = tok

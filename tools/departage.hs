@@ -61,6 +61,8 @@ data Command
         -- ^ Load a simple model and focus on a single MWE type
       }
     | LiftCase
+    | RemoveDeriv
+    | CopyLemma
     | Clear
     | DepStats
 
@@ -145,6 +147,14 @@ liftCaseOptions :: Parser Command
 liftCaseOptions = pure LiftCase
 
 
+removeDerivOptions :: Parser Command
+removeDerivOptions = pure RemoveDeriv
+
+
+copyLemmaOptions :: Parser Command
+copyLemmaOptions = pure CopyLemma
+
+
 clearOptions :: Parser Command
 clearOptions = pure Clear
 
@@ -171,6 +181,14 @@ opts = subparser
     <> command "liftcase"
     (info (helper <*> liftCaseOptions)
       (progDesc "Lift case markers (stdin -> stdout)")
+    )
+    <> command "removederiv"
+    (info (helper <*> removeDerivOptions)
+      (progDesc "Remove DERIVs (stdin -> stdout)")
+    )
+    <> command "copylemma"
+    (info (helper <*> copyLemmaOptions)
+      (progDesc "Copy lemma from orth where not present (stdin -> stdout)")
     )
     <> command "clear"
     (info (helper <*> clearOptions)
@@ -278,6 +296,16 @@ run cmd =
     LiftCase -> do
       xs <- Cupt.parseCupt <$> TL.getContents
       let ys = map Task.liftCase xs
+      TL.putStrLn (Cupt.renderCupt ys)
+
+    RemoveDeriv -> do
+      xs <- Cupt.parseCupt <$> TL.getContents
+      let ys = map Task.removeDeriv xs
+      TL.putStrLn (Cupt.renderCupt ys)
+
+    CopyLemma -> do
+      xs <- Cupt.parseCupt <$> TL.getContents
+      let ys = map Task.copyLemma xs
       TL.putStrLn (Cupt.renderCupt ys)
 
     Clear -> do
