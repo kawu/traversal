@@ -37,8 +37,9 @@ module NLP.Departage.DepTree.Cupt
   ) where
 
 
-import           Control.Arrow (second)
+-- import           Control.Arrow (second)
 
+import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import qualified Data.List as List
 import qualified Data.Text.Lazy as L
@@ -324,9 +325,15 @@ preserveOnly mweTyp =
     preserve (_, typ) = typ == mweTyp
 
 
--- | Inverse of `decorate`. TODO: actually, does not work like that yet, but
--- maybe it's not a problem.
+-- | Inverse of `decorate`.
 abstract :: Sent -> MaySent
 abstract =
-  let update tok = tok {mwe = map (second Just) (mwe tok)}
-  in  tail . map update
+  snd . List.mapAccumL update S.empty . tail
+  where
+    update idSet tok =
+      let (idSet', mwe') = List.mapAccumL updateOne idSet (mwe tok)
+      in  (idSet', tok {mwe=mwe'})
+    updateOne idSet (mweID, mweTyp) =
+      if S.member mweID idSet
+      then (idSet, (mweID, Nothing))
+      else (S.insert mweID idSet, (mweID, Just mweTyp))
