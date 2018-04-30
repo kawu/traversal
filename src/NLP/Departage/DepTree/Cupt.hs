@@ -164,8 +164,10 @@ parseToken line =
     _ -> error "Cupt.parseToken: incorrenct number of line elements"
 
 
+-- | NOTE: We treat "-" as root ID, for the lack of a better solution (SL).
 parseTokID :: T.Text -> TokID
 parseTokID "_" = TokIDRange 0 0
+parseTokID "-" = TokID 0
 parseTokID txt =
   case map (read . T.unpack) . T.split (=='-') $ txt of
     [x] -> TokID x

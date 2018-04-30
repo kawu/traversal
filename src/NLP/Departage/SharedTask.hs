@@ -24,8 +24,10 @@ module NLP.Departage.SharedTask
 
   -- * Utils
   , liftCase
+  , liftDolD
   , removeDeriv
   , copyLemma
+  , copyUpos1
   , removeMweAnnotations
   , depRelStats
   , readDataWith
@@ -1051,6 +1053,13 @@ liftCase :: Cupt.GenSent mwe -> Cupt.GenSent mwe
 liftCase = liftToks $ \tok -> Cupt.deprel tok == "case"
 
 
+-- | Apply `liftToks` over tokens with "dol" function and "D..." XPOS tag.
+liftDolD :: Cupt.GenSent mwe -> Cupt.GenSent mwe
+liftDolD = liftToks $ \tok ->
+  Cupt.deprel tok == "dol" &&
+  T.isPrefixOf "D" (Cupt.xpos tok)
+
+
 ----------------------------------------------
 -- DERIV removal (Turkish)
 ----------------------------------------------
@@ -1105,3 +1114,17 @@ copyLemma =
     updateTok tok
       | Cupt.lemma tok == "_" = tok {Cupt.lemma = T.toLower (Cupt.orth tok)}
       | otherwise = tok
+
+
+----------------------------------------------
+-- Copy xpos to upos (Turkish)
+----------------------------------------------
+
+
+-- | Copy XPOS (first letter only!) to UPOS.
+copyUpos1
+  :: Cupt.GenSent mwe
+  -> Cupt.GenSent mwe
+copyUpos1 =
+  let updateTok tok = tok {Cupt.upos = T.take 1 (Cupt.xpos tok)}
+  in  map updateTok

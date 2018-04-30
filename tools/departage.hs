@@ -61,6 +61,7 @@ data Command
         -- ^ Load a simple model and focus on a single MWE type
       }
     | LiftCase
+    | PrepareSL
     | RemoveDeriv
     | CopyLemma
     | Clear
@@ -147,6 +148,10 @@ liftCaseOptions :: Parser Command
 liftCaseOptions = pure LiftCase
 
 
+prepareSLOptions :: Parser Command
+prepareSLOptions = pure PrepareSL
+
+
 removeDerivOptions :: Parser Command
 removeDerivOptions = pure RemoveDeriv
 
@@ -182,13 +187,17 @@ opts = subparser
     (info (helper <*> liftCaseOptions)
       (progDesc "Lift case markers (stdin -> stdout)")
     )
+    <> command "preparesl"
+    (info (helper <*> prepareSLOptions)
+      (progDesc "Prepare SL (stdin -> stdout)")
+    )
     <> command "removederiv"
     (info (helper <*> removeDerivOptions)
       (progDesc "Remove DERIVs (stdin -> stdout)")
     )
     <> command "copylemma"
     (info (helper <*> copyLemmaOptions)
-      (progDesc "Copy lemma from orth where not present (stdin -> stdout)")
+      (progDesc "Copy lemma from orth where not present (TR; stdin -> stdout)")
     )
     <> command "clear"
     (info (helper <*> clearOptions)
@@ -298,6 +307,11 @@ run cmd =
       let ys = map Task.liftCase xs
       TL.putStrLn (Cupt.renderCupt ys)
 
+    PrepareSL -> do
+      xs <- Cupt.parseCupt <$> TL.getContents
+      let ys = map (Task.liftDolD . Task.copyUpos1) xs
+      TL.putStrLn (Cupt.renderCupt ys)
+
     RemoveDeriv -> do
       xs <- Cupt.parseCupt <$> TL.getContents
       let ys = map Task.removeDeriv xs
@@ -307,6 +321,11 @@ run cmd =
       xs <- Cupt.parseCupt <$> TL.getContents
       let ys = map Task.copyLemma xs
       TL.putStrLn (Cupt.renderCupt ys)
+
+--     CopyUpos -> do
+--       xs <- Cupt.parseCupt <$> TL.getContents
+--       let ys = map Task.copyUpos xs
+--       TL.putStrLn (Cupt.renderCupt ys)
 
     Clear -> do
       xs <- Cupt.parseCupt <$> TL.getContents
