@@ -12,7 +12,6 @@ module NLP.Departage.SharedTask
   ( MWE
   , ParaMap
   , encodeCupt
-  -- , decodeCupt
   , encodeTypeAmbiguity
   , retrieveTypes
   -- , retrieveTypes'
@@ -257,6 +256,63 @@ decodeCupt inputTree
       k <- State.get
       State.put (k+1)
       return (k, typ)
+
+
+-- -- | For .cupt decoding which tries to distinguish adjacent MWEs.
+-- data Prev mwe
+--   = None
+--   | Verb mwe
+--   | Other mwe
+--   deriving (Show, Eq, Ord)
+
+
+-- | Decode a Cupt sentence from a dependency tree.
+-- Does not overwrite the existing annotations.
+decodeCuptSplit
+  :: (Cupt.Token -> Bool)
+     -- ^ Is it a verb?
+  -> AH.DepTree (Maybe Cupt.MweTyp) Cupt.Token
+  -> Cupt.Sent
+decodeCuptSplit isVerb inputTree
+  = L.sortBy (comparing position)
+  . concatMap R.flatten
+  . flip State.evalState (maxMweID inputTree + 1)
+  . decodeTree
+  $ inputTree
+  where
+    position tok = case Cupt.tokID tok of
+      Cupt.TokID x -> (x, -1)
+      Cupt.TokIDRange x y -> (x, x - y)
+    decodeTree tree = decode False Nothing [tree]
+    decode _ _ [] = return []
+    decode ancVerb parent (tree : forest) = do
+      let (prob, tok) = R.rootLabel tree
+          subTrees = R.subForest tree
+      case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
+        Just (Just typ, _) -> do
+          (ancVerb', mwe) <- case withPrev ancVerb parent tok typ of
+            Nothing -> withNewID tok typ
+            Just x  -> return x
+          subTrees' <- decode ancVerb' (Just mwe) subTrees
+          forest'   <- decode ancVerb   parent    forest
+          let root' = tok {Cupt.mwe = mwe : Cupt.mwe tok}
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+        _ -> do
+          subTrees' <- decode False   Nothing subTrees
+          forest'   <- decode ancVerb parent  forest
+          let root' = tok -- DO NOT OVERWRITE ANNOTATION!
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+    withPrev ancVerb prev tok typ = do
+      (prevID, prevTyp) <- prev
+      guard $ prevTyp == typ
+      guard . not $ ancVerb && isVerb tok
+      return (ancVerb || isVerb tok, (prevID, typ))
+    withNewID tok typ = do
+      k <- State.get
+      State.put (k+1)
+      return (isVerb tok, (k, typ))
 
 
 -- | Determine the maximum mwe ID present in the given tree.
@@ -844,6 +900,7 @@ sgdCfg = SGD.sgdArgsDefault
 -- | Additional tagging configuration.
 data TagConfig = TagConfig
   { tagBestPath :: Bool
+  , splitMwesOn :: Maybe T.Text
   }
 
 
@@ -913,7 +970,12 @@ tagEnsemble config tagConfig model = do -- inpFile outFile = do
   ys <- map (encodeTypeAmbiguity $ Model.mweTypSet model)
     <$> tagMany config (Cfg.baseFeatConfig config) tagConfig (Model.paraMapBase model) xs
   zs <- tagMany config (Cfg.mweFeatConfig  config) tagConfig (Model.paraMapMwe model) ys
-  LT.putStrLn $ Cupt.renderCupt (map (Cupt.abstract . decodeCupt) zs) -- outFile
+  LT.putStrLn $ Cupt.renderCupt (map (Cupt.abstract . decode) zs) -- outFile
+  where
+    decode =
+      case splitMwesOn tagConfig of
+        Nothing -> decodeCupt
+        Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
 
 
 -- | High-level tagging function.
@@ -930,7 +992,7 @@ tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
   xs <- readDataWith config Nothing Nothing -- inpFile
   ys <- map (fmap addType)
     <$> tagMany config (Cfg.baseFeatConfig config) tagConfig model xs
-  LT.putStrLn . Cupt.renderCupt $ map (Cupt.abstract . decodeCupt) ys -- outFile
+  LT.putStrLn . Cupt.renderCupt $ map (Cupt.abstract . decode) ys -- outFile
   where
     addType (probMap, tok) = (,tok) . P.fromList $ do
       (mwe, prob) <- P.toList probMap
@@ -938,6 +1000,10 @@ tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
         if mwe
         then (Just mweTyp, prob)
         else (Nothing, prob)
+    decode =
+      case splitMwesOn tagConfig of
+        Nothing -> decodeCupt
+        Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
 
 
 -- -- | High-level tagging function with separate models.

@@ -59,6 +59,8 @@ data Command
         -- ^ Use best path instead of marginals
       , mweType :: Maybe T.Text
         -- ^ Load a simple model and focus on a single MWE type
+      , splitOn :: Maybe T.Text
+        -- ^ Split MWEs on a given POS tag
       }
     | LiftCase
     | PrepareSL
@@ -141,6 +143,11 @@ tagOptions = Tag
         ( metavar "MWE-TYPE"
        <> long "mwe"
        <> help "Focus on a particular MWE type"
+        )
+  <*> (optional . strOption)
+        ( metavar "SPLIT"
+       <> long "split"
+       <> help "Split MWEs on a given POS tag"
         )
 
 
@@ -227,7 +234,8 @@ run cmd =
             then configPath
             else "./" </> configPath
           tagConfig = Task.TagConfig
-            { tagBestPath = bestPath }
+            { tagBestPath = bestPath
+            , splitMwesOn = splitOn }
       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
       case mweType of
         Nothing -> do
