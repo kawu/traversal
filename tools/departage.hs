@@ -68,6 +68,7 @@ data Command
     | CopyLemma
     | Clear
     | DepStats
+    | MweStats
 
 
 --------------------------------------------------
@@ -175,6 +176,10 @@ depStatsOptions :: Parser Command
 depStatsOptions = pure DepStats
 
 
+mweStatsOptions :: Parser Command
+mweStatsOptions = pure MweStats
+
+
 --------------------------------------------------
 -- Global options
 --------------------------------------------------
@@ -213,6 +218,10 @@ opts = subparser
     <> command "depstats"
     (info (helper <*> depStatsOptions)
       (progDesc "Show dependency relation statistics")
+    )
+    <> command "mwestats"
+    (info (helper <*> mweStatsOptions)
+      (progDesc "Show MWE statistics")
     )
   )
 
@@ -312,22 +321,22 @@ run cmd =
 
     LiftCase -> do
       xs <- Cupt.parseCupt <$> TL.getContents
-      let ys = map Task.liftCase xs
+      let ys = map2 Task.liftCase xs
       TL.putStrLn (Cupt.renderCupt ys)
 
     PrepareSL -> do
       xs <- Cupt.parseCupt <$> TL.getContents
-      let ys = map (Task.liftDolD . Task.copyUpos1) xs
+      let ys = map2 (Task.liftDolD . Task.copyUpos1) xs
       TL.putStrLn (Cupt.renderCupt ys)
 
     RemoveDeriv -> do
       xs <- Cupt.parseCupt <$> TL.getContents
-      let ys = map Task.removeDeriv xs
+      let ys = map2 Task.removeDeriv xs
       TL.putStrLn (Cupt.renderCupt ys)
 
     CopyLemma -> do
       xs <- Cupt.parseCupt <$> TL.getContents
-      let ys = map Task.copyLemma xs
+      let ys = map2 Task.copyLemma xs
       TL.putStrLn (Cupt.renderCupt ys)
 
 --     CopyUpos -> do
@@ -337,16 +346,31 @@ run cmd =
 
     Clear -> do
       xs <- Cupt.parseCupt <$> TL.getContents
-      let ys = map Task.removeMweAnnotations xs
+      let ys = map2 Task.removeMweAnnotations xs
       TL.putStrLn (Cupt.renderCupt ys)
 
     DepStats -> do
-      xs <- Cupt.parseCupt <$> TL.getContents
+      xs <- map Cupt.decorate . concat . Cupt.parseCupt
+        <$> TL.getContents
       let statMap = Task.depRelStats xs
           n = sum (M.elems statMap)
           statList = sortBy (comparing snd) (M.toList statMap)
       forM_ (reverse statList) $ \(dep, k) -> do
-        putStr $ T.unpack dep
+        putStr $ show dep
+        putStr ":\t"
+        putStr $ show k
+        putStr "\t("
+        putStr $ show (fromIntegral k / fromIntegral n :: Double)
+        putStrLn ")"
+
+    MweStats -> do
+      xs <- map Cupt.decorate . concat . Cupt.parseCupt
+        <$> TL.getContents
+      let statMap = Task.mweStats xs
+          n = sum (M.elems statMap)
+          statList = sortBy (comparing snd) (M.toList statMap)
+      forM_ (reverse statList) $ \(mwe, k) -> do
+        putStr $ T.unpack mwe
         putStr ":\t"
         putStr $ show k
         putStr "\t("
@@ -362,3 +386,12 @@ main =
        ( fullDesc
       <> progDesc "MWE identification based on tree-structured CRFs"
       <> header "departage" )
+
+
+----------------------------------------------
+-- Pure utils
+----------------------------------------------
+
+
+map2 :: (a -> b) -> [[a]] -> [[b]]
+map2 = map . map

@@ -22,12 +22,12 @@ module NLP.Departage.DepTree.Cupt
     -- * Parsing
   , readCupt
   , parseCupt
-  , parseSent
+  , parsePar
 
     -- * Rendering
   , writeCupt
   , renderCupt
-  , renderSent
+  , renderPar
 
     -- * Conversion
   , rootParID
@@ -94,14 +94,15 @@ data GenToken mwe = Token
 
 
 -- | Word index, integer starting at 1 for each new sentence; may be a range for
--- multiword tokens; may be a decimal number(??? what did I mean???) for empty
--- nodes.
+-- multiword tokens.
 --
 -- WARNING: we use `TokIDRange 0 0` as a special value for tokens out of the
 -- selected tokenization (basically it stands for '_').
 data TokID
   = TokID Int
   | TokIDRange Int Int
+  | TokIDCopy Int Int
+    -- ^ An empty node (marked as `CopyOf` in UD data)
   deriving (Show, Eq, Ord)
 
 
@@ -124,25 +125,33 @@ chosen tok = upos tok /= "_"
 
 
 -- | Read an entire Cupt file.
-readCupt :: FilePath -> IO [MaySent]
+readCupt :: FilePath -> IO [[MaySent]]
 readCupt = fmap parseCupt . L.readFile
 
 
 -- | Parse an entire Cupt file.
-parseCupt :: L.Text -> [MaySent]
+parseCupt :: L.Text -> [[MaySent]]
 parseCupt
-  = map parseSent
+  = map parsePar
   . filter (not . L.null)
   . L.splitOn "\n\n"
 
 
--- | Parse a given textual representation of a sentence. It can be assumed to
--- contain no empty lines, but it can contain comments.
-parseSent :: L.Text -> MaySent
-parseSent
-  = map (parseToken . L.toStrict)
+-- | Parse a given textual representation of a paragraph. It can be assumed to
+-- contain no empty lines, but it can contain comments. Moreover, it can contain
+-- several sentences, each starting with token ID == 1.
+parsePar :: L.Text -> [MaySent]
+parsePar
+  = groupBy tokLE
+  . map (parseToken . L.toStrict)
   . filter (not . L.isPrefixOf "#")
   . L.lines
+  where
+    tokLE tx ty = fstPos (tokID tx) <= fstPos (tokID ty)
+    fstPos (TokID x) = x
+    fstPos (TokIDRange x _) = x
+    fstPos (TokIDCopy x _) = x
+    -- tokDiff tx ty = tokID tx /= tokID ty
 
 
 parseToken :: T.Text -> MayToken
@@ -168,11 +177,17 @@ parseToken line =
 parseTokID :: T.Text -> TokID
 parseTokID "_" = TokIDRange 0 0
 parseTokID "-" = TokID 0
-parseTokID txt =
-  case map (read . T.unpack) . T.split (=='-') $ txt of
-    [x] -> TokID x
-    [x, y] -> TokIDRange x y
-    _ -> error "Cupt.parseTokID: invalid token ID"
+parseTokID txt
+  | T.isInfixOf "-" txt =
+      case map (read . T.unpack) . T.split (=='-') $ txt of
+        [x, y] -> TokIDRange x y
+        _ -> error "Cupt.parseTokID: invalid token ID with -"
+  | T.isInfixOf "." txt =
+      case map (read . T.unpack) . T.split (=='.') $ txt of
+        [x, y] -> TokIDCopy x y
+        _ -> error "Cupt.parseTokID: invalid token ID with ."
+  | otherwise =
+      TokID $ read (T.unpack txt)
 
 
 parseFeats :: T.Text -> M.Map T.Text T.Text
@@ -209,16 +224,16 @@ parseMWE txt =
 -----------------------------------
 
 
-writeCupt :: [MaySent] -> FilePath -> IO ()
+writeCupt :: [[MaySent]] -> FilePath -> IO ()
 writeCupt xs filePath = L.writeFile filePath (renderCupt xs)
 
 
-renderCupt :: [MaySent] -> L.Text
-renderCupt = L.intercalate "\n" . map renderSent
+renderCupt :: [[MaySent]] -> L.Text
+renderCupt = L.intercalate "\n" . map renderPar
 
 
-renderSent :: MaySent -> L.Text
-renderSent = L.unlines . map renderToken
+renderPar :: [MaySent] -> L.Text
+renderPar = L.unlines . map renderToken . concat
 
 
 renderToken :: MayToken -> L.Text
@@ -247,6 +262,8 @@ renderTokID tid =
       "_"
     TokIDRange x y ->
       L.intercalate "-" [psh x, psh y]
+    TokIDCopy x y ->
+      L.intercalate "." [psh x, psh y]
   where
     psh = L.pack . show
 
@@ -339,3 +356,20 @@ abstract =
       if S.member mweID idSet
       then (idSet, (mweID, Nothing))
       else (S.insert mweID idSet, (mweID, Just mweTyp))
+
+
+-----------------------------------
+-- Utils
+-----------------------------------
+
+
+-- | A version of `List.groupBy` which always looks at the adjacent elements.
+groupBy :: (a -> a -> Bool) -> [a] -> [[a]]
+groupBy _ [] = []
+groupBy _ [x] = [[x]]
+groupBy eq (x : y : rest)
+  | eq x y = addHD x $ groupBy eq (y : rest)
+  | otherwise = [x] : groupBy eq (y : rest)
+  where
+    addHD x (xs : xss) = (x : xs) : xss
+    addHD x [] = [[x]]

@@ -29,6 +29,7 @@ module NLP.Departage.SharedTask
   , copyUpos1
   , removeMweAnnotations
   , depRelStats
+  , mweStats
   , readDataWith
   ) where
 
@@ -91,13 +92,13 @@ import Debug.Trace (trace)
 
 
 -- | Encode a Cupt sentence as a dependency tree.
-encodeCupt :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
+encodeCupt :: Cupt.Sent -> AH.DepTree MWE Cupt.Token
 encodeCupt toks0 =
 
   -- case S.toList (childMap M.! Cupt.TokID 0) of
   case S.toList (childMap M.! Cupt.rootParID) of
-    [rootID] -> Just $ go rootID
-    _ -> trace "SharedTask.encodeCupt: several roots?" Nothing
+    [rootID] -> go rootID
+    _ -> error "SharedTask.encodeCupt: several roots?"
 
   where
 
@@ -163,12 +164,12 @@ encodeCupt toks0 =
 
 -- | Encode a Cupt sentence as a "sequential" dependency tree, i.e., a
 -- dependency tree which is structurally equivalent to a sequence.
-encodeCuptSeq :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
+encodeCuptSeq :: Cupt.Sent -> AH.DepTree MWE Cupt.Token
 encodeCuptSeq sent =
 
   case mkT sent of
-    [depTree] -> Just depTree
-    _ -> trace "SharedTask.encodeCuptSeq: sempty sentence?" Nothing
+    [depTree] -> depTree
+    _ -> error "SharedTask.encodeCuptSeq: sempty sentence?"
 
   where
 
@@ -831,7 +832,7 @@ trainEnsemble
 trainEnsemble config trainPath devPath = do
 
   putStrLn "# Basic model"
-  let readData = readDataWith config Nothing . Just
+  let readData = fmap concat . readDataWith config Nothing . Just
   trainData <- readData trainPath
   devData   <- case devPath of
     Nothing -> return []
@@ -839,9 +840,10 @@ trainEnsemble config trainPath devPath = do
   paraMap <- train config (Cfg.baseFeatConfig config) sgdCfg trainData devData
 
   putStrLn "# MWE identification model"
-  typSet <- retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
+  typSet <- retrieveTypes . map Cupt.decorate . concat <$> Cupt.readCupt trainPath
   let readDataMWE
         = fmap (map (encodeTypeAmbiguity typSet))
+        . fmap concat
         . readDataWith config Nothing . Just
   trainDataMWE <- readDataMWE trainPath
   devDataMWE <- case devPath of
@@ -866,13 +868,13 @@ trainSimple
 trainSimple config mweTyp trainPath devPath = do
 
   putStrLn "# Identify MWE types"
-  typSet <- retrieveTypes . map Cupt.decorate <$> Cupt.readCupt trainPath
+  typSet <- retrieveTypes . map Cupt.decorate . concat <$> Cupt.readCupt trainPath
 
   unless (S.member mweTyp typSet) $ do
     error "Provided type not in the set of available types!"
 
   putStrLn $ "# Training model for: " ++ T.unpack mweTyp
-  let readData = readDataWith config (Just mweTyp) . Just
+  let readData = fmap concat . readDataWith config (Just mweTyp) . Just
   trainData <- readData trainPath
   devData   <- case devPath of
     Nothing -> return []
@@ -944,8 +946,8 @@ tagMany
   -> Cfg.FeatConfig
   -> TagConfig
   -> ParaMap mwe
-  -> [AH.DepTree mwe Cupt.Token]
-  -> IO [AH.DepTree mwe Cupt.Token]
+  -> [[AH.DepTree mwe Cupt.Token]]
+  -> IO [[AH.DepTree mwe Cupt.Token]]
 tagMany globCfg cfg tagCfg paraMap depTrees = do
   featSet <- M.keysSet <$> Map.toMap paraMap
   let featMap () = M.fromList . map (,0) $ S.toList featSet
@@ -954,7 +956,7 @@ tagMany globCfg cfg tagCfg paraMap depTrees = do
         , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
         }
   Mame.runMame makeBuff $ do
-    mapM (tagOne globCfg cfg tagCfg paraMap) depTrees
+    mapM (mapM (tagOne globCfg cfg tagCfg paraMap)) depTrees
 
 
 -- | High-level tagging function.
@@ -962,15 +964,13 @@ tagEnsemble
   :: Cfg.Config
   -> TagConfig
   -> Model.EnsembleModel
---   -> FilePath -- ^ Input file
---   -> FilePath -- ^ Output file
   -> IO ()
-tagEnsemble config tagConfig model = do -- inpFile outFile = do
-  xs <- readDataWith config Nothing Nothing -- inpFile
-  ys <- map (encodeTypeAmbiguity $ Model.mweTypSet model)
+tagEnsemble config tagConfig model = do
+  xs <- readDataWith config Nothing Nothing
+  ys <- map2 (encodeTypeAmbiguity $ Model.mweTypSet model)
     <$> tagMany config (Cfg.baseFeatConfig config) tagConfig (Model.paraMapBase model) xs
   zs <- tagMany config (Cfg.mweFeatConfig  config) tagConfig (Model.paraMapMwe model) ys
-  LT.putStrLn $ Cupt.renderCupt (map (Cupt.abstract . decode) zs) -- outFile
+  LT.putStrLn $ Cupt.renderCupt (map2 (Cupt.abstract . decode) zs)
   where
     decode =
       case splitMwesOn tagConfig of
@@ -985,14 +985,12 @@ tagSimple
   -> Cupt.MweTyp
               -- ^ MWE type to focus on
   -> Model.SimpleModel
---   -> FilePath -- ^ Input file
---   -> FilePath -- ^ Output file
   -> IO ()
-tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
-  xs <- readDataWith config Nothing Nothing -- inpFile
-  ys <- map (fmap addType)
+tagSimple config tagConfig mweTyp model = do
+  xs <- readDataWith config Nothing Nothing
+  ys <- map2 (fmap addType)
     <$> tagMany config (Cfg.baseFeatConfig config) tagConfig model xs
-  LT.putStrLn . Cupt.renderCupt $ map (Cupt.abstract . decode) ys -- outFile
+  LT.putStrLn . Cupt.renderCupt $ map2 (Cupt.abstract . decode) ys
   where
     addType (probMap, tok) = (,tok) . P.fromList $ do
       (mwe, prob) <- P.toList probMap
@@ -1004,6 +1002,41 @@ tagSimple config tagConfig mweTyp model = do -- inpFile outFile = do
       case splitMwesOn tagConfig of
         Nothing -> decodeCupt
         Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
+
+
+-- -- | High-level tagging function.
+-- tagSimplePipe
+--   :: Cfg.Config
+--   -> TagConfig
+--   -> Cupt.MweTyp  -- ^ MWE type to focus on
+--   -> Model.SimpleModel
+--   -> IO ()
+-- tagSimplePipe config tagConfig mweTyp paraMap = do
+--   featSet <- M.keysSet <$> Map.toMap paraMap
+--   let featMap () = M.fromList . map (,0) $ S.toList featSet
+--       makeBuff = Mame.Make
+--         { Mame.mkValueBuffer = Map.fromMap $ featMap ()
+--         , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
+--         }
+--   xs <- readDataWith config Nothing Nothing
+--   Mame.runMame makeBuff $ do
+--     Pipes.runEffect $ do
+--       Pipes.for (Pipes.each xs) $ \inpTree -> do
+--         outTree <- Pipes.lift $
+--           tagOne config (Cfg.baseFeatConfig config) tagConfig paraMap inpTree
+--         let txt = Cupt.renderSent . Cupt.abstract . decode $ fmap addType outTree
+--         liftIO $ LT.putStrLn txt >> LT.putStrLn ""
+--   where
+--     addType (probMap, tok) = (,tok) . P.fromList $ do
+--       (mwe, prob) <- P.toList probMap
+--       return $
+--         if mwe
+--         then (Just mweTyp, prob)
+--         else (Nothing, prob)
+--     decode =
+--       case splitMwesOn tagConfig of
+--         Nothing -> decodeCupt
+--         Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
 
 
 -- -- | High-level tagging function with separate models.
@@ -1048,18 +1081,17 @@ readDataWith
   -> Maybe Cupt.MweTyp
     -- ^ Ignore MWEs of all other types (if supplied)
   -> Maybe FilePath
-  -> IO [AH.DepTree MWE Cupt.Token]
-readDataWith config mayMweTyp mayPath
-  = fmap ( mapMaybe
-           $ encodeIt
-           . discardOtherMWEs
-           . Cupt.decorate
-           -- . handleCase
-         )
-  $ case mayPath of
-      Just path -> Cupt.readCupt path
-      Nothing -> Cupt.parseCupt <$> LT.getContents
+  -> IO [[AH.DepTree MWE Cupt.Token]]
+readDataWith config mayMweTyp mayPath = do
+  map (map procSent) <$> case mayPath of
+    Just path -> Cupt.readCupt path
+    Nothing -> Cupt.parseCupt <$> LT.getContents
   where
+    procSent
+      = encodeIt
+      . discardOtherMWEs
+      . Cupt.decorate
+      -- . handleCase
     -- TODO: Cannot be done here when simple models are used!
     -- Probably even with the ensemble model this is wrong!
     -- handleCase =
@@ -1081,12 +1113,39 @@ removeMweAnnotations :: Cupt.GenSent mwe -> Cupt.GenSent mwe
 removeMweAnnotations = map $ \tok -> tok {Cupt.mwe = []}
 
 
+-- -- | Compute dependency relation statistics.
+-- depRelStats :: [Cupt.GenSent mwe] -> M.Map Cupt.MweTyp Int
+-- depRelStats
+--   = M.fromListWith (+)
+--   . map (,1)
+--   . map Cupt.deprel
+--   . concat
+
+
 -- | Compute dependency relation statistics.
-depRelStats :: [Cupt.GenSent mwe] -> M.Map Cupt.MweTyp Int
+depRelStats :: [Cupt.Sent] -> M.Map (T.Text, Maybe T.Text) Int
 depRelStats
+  = M.unionsWith (+)
+  . map
+    ( search
+    . encodeCupt
+    )
+  where
+    search = flip State.execState M.empty . go Nothing
+    go parPOS (R.Node (_prob, tok) subTrees) = do
+      add (Cupt.deprel tok) parPOS
+      let tokPos = Just $ Cupt.upos tok
+      forM_ subTrees $ \subTree -> do
+        go tokPos subTree
+    add rel pos = State.modify' $ M.insertWith (+) (rel, pos) 1
+
+
+-- | Compute dependency relation statistics.
+mweStats :: [Cupt.Sent] -> M.Map Cupt.MweTyp Int
+mweStats
   = M.fromListWith (+)
   . map (,1)
-  . map Cupt.deprel
+  . concatMap (map snd . Cupt.mwe)
   . concat
 
 
@@ -1194,3 +1253,13 @@ copyUpos1
 copyUpos1 =
   let updateTok tok = tok {Cupt.upos = T.take 1 (Cupt.xpos tok)}
   in  map updateTok
+
+
+
+----------------------------------------------
+-- Pure utils
+----------------------------------------------
+
+
+map2 :: (a -> b) -> [[a]] -> [[b]]
+map2 = map . map
