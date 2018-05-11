@@ -69,11 +69,33 @@ data Command
     | Clear
     | DepStats
     | MweStats
+    | Merge
+      { origFile :: FilePath
+        -- ^ Original file
+      , systemFile :: FilePath
+        -- ^ File with missing tokens
+      }
 
 
 --------------------------------------------------
 -- Parse options
 --------------------------------------------------
+
+
+mergeOptions :: Parser Command
+mergeOptions = Merge
+  <$> strOption
+        ( metavar "FILE"
+       <> long "orig"
+       <> short 'o'
+       <> help "Original file"
+        )
+  <*> strOption
+        ( metavar "FILE"
+       <> long "system"
+       <> short 's'
+       <> help "System (tagged) file"
+        )
 
 
 trainOptions :: Parser Command
@@ -195,6 +217,10 @@ opts = subparser
     (info (helper <*> tagOptions)
       (progDesc "Tag the input file")
     )
+    <> command "merge"
+    (info (helper <*> mergeOptions)
+      (progDesc "Merge two files")
+    )
     <> command "liftcase"
     (info (helper <*> liftCaseOptions)
       (progDesc "Lift case markers (stdin -> stdout)")
@@ -272,6 +298,12 @@ run cmd =
           case modelPathMay of
             Just path -> Model.saveSimple model path
             Nothing -> return ()
+
+    Merge{..} -> do
+      xss <- Cupt.readCupt origFile
+      yss <- Cupt.readCupt systemFile
+      let zss = Cupt.mergeCupt xss yss
+      TL.putStrLn $ Cupt.renderCupt zss
 
 --     Train{..} -> do
 --       -- featCfg <- Cfg.loadConfig configPath

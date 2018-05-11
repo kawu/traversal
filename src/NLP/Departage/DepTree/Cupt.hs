@@ -34,6 +34,9 @@ module NLP.Departage.DepTree.Cupt
   , decorate
   , preserveOnly
   , abstract
+
+    -- * Merging
+  , mergeCupt
   ) where
 
 
@@ -356,6 +359,41 @@ abstract =
       if S.member mweID idSet
       then (idSet, (mweID, Nothing))
       else (S.insert mweID idSet, (mweID, Just mweTyp))
+
+
+-----------------------------------
+-- Merging
+-----------------------------------
+
+
+-- | Merge the two .cupt files, i.e., copy the tokens which are in the first
+-- file but not in the second one to the second one.
+mergeCupt
+  :: [[GenSent mwe]]
+  -> [[GenSent mwe]]
+  -> [[GenSent mwe]]
+mergeCupt xss yss =
+  map (uncurry mergePar) (zip xss yss)
+  where
+    mergePar xs ys = map (uncurry mergeSent) (zip xs ys)
+
+
+-- | Merge the two .cupt sentences, i.e., copy the tokens which are in the first
+-- sentence but not in the second one to the second one.
+mergeSent
+  :: GenSent mwe
+  -> GenSent mwe
+  -> GenSent mwe
+mergeSent =
+  go
+  where
+    go (x:xs) (y:ys)
+      | tokID x < tokID y = x : go xs (y:ys)
+      | tokID x == tokID y = y : go xs ys
+      | otherwise = error "Cupt.mergeSent: impossible happened"
+    go (x:xs) [] = x:xs
+    go [] [] = []
+    go [] (_:_) = error "Cupt.mergeSent: impossible2 happened"
 
 
 -----------------------------------
