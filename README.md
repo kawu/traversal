@@ -37,6 +37,6 @@ TODO
 
 
 
-[shared-task] http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018___lb__COLING__rb__&subpage=CONF_40_Shared_Task "PARSEME shared task - edition 1.1 (2018)"
 [stack]: http://docs.haskellstack.org "Haskell Tool Stack"
+[shared-task]: http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018___lb__COLING__rb__&subpage=CONF_40_Shared_Task "PARSEME shared task - edition 1.1 (2018)"
 [cupt]: http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018___lb__COLING__rb__&subpage=CONF_45_Format_specification "The CUPT format"
