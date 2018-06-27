@@ -19,13 +19,11 @@ import           System.FilePath (isAbsolute, (</>))
 
 import qualified Dhall as Dhall
 
-import qualified NLP.Departage.CRF.SGD as SGD
--- import qualified NLP.Departage.CRF.Map as Map
-import qualified NLP.Departage.DepTree.Cupt as Cupt
-import qualified NLP.Departage.SharedTask as Task
--- import qualified NLP.Departage.FeatConfig as Cfg
-import qualified NLP.Departage.Config as Cfg
-import qualified NLP.Departage.Model as Model
+import qualified NLP.Traversal.CRF.SGD as SGD
+import qualified NLP.Traversal.DepTree.Cupt as Cupt
+import qualified NLP.Traversal.SharedTask as Task
+import qualified NLP.Traversal.Config as Cfg
+import qualified NLP.Traversal.Model as Model
 
 
 --------------------------------------------------

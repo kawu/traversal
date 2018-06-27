@@ -5,7 +5,7 @@
 -- | Stochastic gradient descent for hyper CRFs.
 
 
-module NLP.Departage.CRF.SGD
+module NLP.Traversal.CRF.SGD
 ( SgdArgs(..)
 , sgdArgsDefault
 , sgd
@@ -22,11 +22,11 @@ import qualified System.Random as R
 -- import qualified Data.Vector.Unboxed as U
 -- import qualified Data.Vector.Unboxed.Mutable as UM
 
-import qualified NLP.Departage.CRF.Map as Map
-import           NLP.Departage.CRF.Map (Map)
-import qualified NLP.Departage.CRF.Mame as Mame
-import           NLP.Departage.CRF.Mame (Mame)
-import qualified NLP.Departage.CRF.SGD.Dataset as D
+import qualified NLP.Traversal.CRF.Map as Map
+import           NLP.Traversal.CRF.Map (Map)
+import qualified NLP.Traversal.CRF.Mame as Mame
+import           NLP.Traversal.CRF.Mame (Mame)
+import qualified NLP.Traversal.CRF.SGD.Dataset as D
 
 
 ------------------------------------------------------------------

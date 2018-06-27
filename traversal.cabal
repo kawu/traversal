@@ -1,4 +1,4 @@
-name:               departage
+name:               traversal
 version:            0.1.0
 synopsis:           TODO
 description:
@@ -6,12 +6,12 @@ description:
 license:            BSD2
 license-file:       LICENSE
 cabal-version:      >= 1.10
-copyright:          Copyright (c) 2017 Jakub Waszczuk
+copyright:          Copyright (c) 2018 Jakub Waszczuk
 author:             Jakub Waszczuk
 maintainer:         waszczuk.kuba@gmail.com
 stability:          experimental
 category:           Natural Language Processing
-homepage:           https://bitbucket.com/kawu/departage
+homepage:           https://github.com/kawu/traversal
 build-type:         Simple
 
 library
@@ -47,26 +47,22 @@ library
 
 
     exposed-modules:
-        NLP.Departage.DepTree
-      , NLP.Departage.DepTree.AsHype
-      , NLP.Departage.DepTree.Cupt
-      , NLP.Departage.Parser.Item
-      , NLP.Departage.Parser.Arc
-      , NLP.Departage.Parser.BottomUp
-      , NLP.Departage.Hype
-      , NLP.Departage.CRF
-      , NLP.Departage.CRF.Map
-      , NLP.Departage.CRF.Mame
-      , NLP.Departage.CRF.SGD
-      , NLP.Departage.CRF.SGD.Dataset
-      , NLP.Departage.Prob
-      , NLP.Departage.Core
-      , NLP.Departage.SharedTask
-      , NLP.Departage.FeatConfig
-      , NLP.Departage.Model
+        NLP.Traversal.DepTree
+      , NLP.Traversal.DepTree.AsHype
+      , NLP.Traversal.DepTree.Cupt
+      , NLP.Traversal.Hype
+      , NLP.Traversal.CRF
+      , NLP.Traversal.CRF.Map
+      , NLP.Traversal.CRF.Mame
+      , NLP.Traversal.CRF.SGD
+      , NLP.Traversal.CRF.SGD.Dataset
+      , NLP.Traversal.Prob
+      , NLP.Traversal.Core
+      , NLP.Traversal.SharedTask
+      , NLP.Traversal.Model
 
-      , NLP.Departage.Config
-      , NLP.Departage.Config.Feat
+      , NLP.Traversal.Config
+      , NLP.Traversal.Config.Feat
 
     -- other-modules:
 
@@ -74,13 +70,13 @@ library
 
 source-repository head
     type: git
-    location: https://kawu@bitbucket.org/kawu/departage.git
+    location: https://github.com/kawu/traversal.git
 
-executable departage
+executable traversal
     default-language:
         Haskell2010
     build-depends:
-        departage
+        traversal
       , base                    >= 4        && < 5
       , optparse-applicative    >= 0.12     && < 0.15
       , dhall                   >= 1.11     && < 1.12
@@ -88,5 +84,5 @@ executable departage
       , text                    >= 1.2      && < 1.3
       , containers              >= 0.5      && < 0.6
     hs-source-dirs: tools
-    main-is: departage.hs
+    main-is: traversal.hs
     ghc-options: -Wall -O2 -threaded -rtsopts

@@ -1,7 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 
-module NLP.Departage.Model
+module NLP.Traversal.Model
   ( EnsembleModel (..)
   , saveEnsemble
   , loadEnsemble
@@ -19,9 +19,9 @@ import qualified Data.Text as T
 import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 
-import qualified NLP.Departage.CRF.Map as Map
-import qualified NLP.Departage.Core as Core
-import qualified NLP.Departage.DepTree.Cupt as Cupt
+import qualified NLP.Traversal.CRF.Map as Map
+import qualified NLP.Traversal.Core as Core
+import qualified NLP.Traversal.DepTree.Cupt as Cupt
 
 
 ----------------------------------------------

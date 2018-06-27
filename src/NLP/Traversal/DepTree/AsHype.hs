@@ -13,7 +13,7 @@
 -- tree (in terms of labels).
 
 
-module NLP.Departage.DepTree.AsHype
+module NLP.Traversal.DepTree.AsHype
   ( DepTree
   , EncHype (..)
   , Label (..)
@@ -41,12 +41,12 @@ import qualified Data.Set as S
 import qualified Data.Map.Strict as M
 import qualified Data.Traversable as Trav
 
-import qualified NLP.Departage.CRF.Map as CRF
-import qualified NLP.Departage.CRF as CRF
+import qualified NLP.Traversal.CRF.Map as CRF
+import qualified NLP.Traversal.CRF as CRF
 
-import qualified NLP.Departage.Hype as Hype
-import qualified NLP.Departage.DepTree as Dep
-import qualified NLP.Departage.Prob as P
+import qualified NLP.Traversal.Hype as Hype
+import qualified NLP.Traversal.DepTree as Dep
+import qualified NLP.Traversal.Prob as P
 
 -- import Debug.Trace (trace)
 

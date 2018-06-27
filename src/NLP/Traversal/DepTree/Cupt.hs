@@ -5,7 +5,7 @@
 -- | Support for the Cupt format -- see http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018&subpage=CONF_45_Format_specification.
 
 
-module NLP.Departage.DepTree.Cupt
+module NLP.Traversal.DepTree.Cupt
   (
     -- * Types
     GenSent

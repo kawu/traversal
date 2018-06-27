@@ -7,7 +7,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 
-module NLP.Departage.CRF.Map
+module NLP.Traversal.CRF.Map
 (
 -- * Floats
   Flo (..)

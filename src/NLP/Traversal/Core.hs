@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 
 
-module NLP.Departage.Core
+module NLP.Traversal.Core
   ( MWE
   , Feat(..)
   , ParaMap
@@ -13,7 +13,7 @@ import           GHC.Generics (Generic)
 import qualified Data.Text as T
 import           Data.Hashable (Hashable)
 
-import qualified NLP.Departage.CRF.Map as Map
+import qualified NLP.Traversal.CRF.Map as Map
 
 
 ----------------------------------------------

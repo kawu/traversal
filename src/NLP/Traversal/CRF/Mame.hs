@@ -1,4 +1,4 @@
-module NLP.Departage.CRF.Mame
+module NLP.Traversal.CRF.Mame
 (
 -- * Buffers
   Mame

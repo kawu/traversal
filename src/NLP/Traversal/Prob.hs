@@ -3,7 +3,7 @@
 -- to arcs with 0 probability mass.
 
 
-module NLP.Departage.Prob
+module NLP.Traversal.Prob
   ( Prob
   , fromList
   , unProb

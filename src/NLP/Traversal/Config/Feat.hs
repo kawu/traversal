@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 
 
-module NLP.Departage.Config.Feat
+module NLP.Traversal.Config.Feat
   ( FeatConfig(..)
   , UnaryOption(..)
   , ParentOption(..)

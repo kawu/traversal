@@ -4,7 +4,7 @@
 -- | Dataset abstraction.
 
 
-module NLP.Departage.CRF.SGD.Dataset
+module NLP.Traversal.CRF.SGD.Dataset
 (
 -- * Dataset
   Dataset (..)

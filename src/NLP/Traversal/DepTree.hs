@@ -5,7 +5,7 @@
 -- | Module for working with dependency trees.
 
 
-module NLP.Departage.DepTree
+module NLP.Traversal.DepTree
 (
 -- * Types
   Tree (..)

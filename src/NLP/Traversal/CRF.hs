@@ -5,7 +5,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 
-module NLP.Departage.CRF
+module NLP.Traversal.CRF
 (
 -- * Types
   Prob
@@ -57,15 +57,15 @@ import qualified Data.MemoCombinators as Memo
 -- import qualified Pipes as Pipes
 -- import           Streaming.Prelude (Stream, Of)
 
-import qualified NLP.Departage.Hype as H
-import           NLP.Departage.Hype (Hype, Arc (..), Node (..))
+import qualified NLP.Traversal.Hype as H
+import           NLP.Traversal.Hype (Hype, Arc (..), Node (..))
 
--- import qualified NLP.Departage.CRF.SGD as SGD
--- import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
-import qualified NLP.Departage.CRF.Map as Map
-import           NLP.Departage.CRF.Map (Flo(..)) -- , RefMap(..))
-import           NLP.Departage.CRF.Mame (Mame)
-import qualified NLP.Departage.CRF.Mame as Mame
+-- import qualified NLP.Traversal.CRF.SGD as SGD
+-- import qualified NLP.Traversal.CRF.SGD.Dataset as SGD.Dataset
+import qualified NLP.Traversal.CRF.Map as Map
+import           NLP.Traversal.CRF.Map (Flo(..)) -- , RefMap(..))
+import           NLP.Traversal.CRF.Mame (Mame)
+import qualified NLP.Traversal.CRF.Mame as Mame
 
 -- import Debug.Trace (trace)
 

@@ -8,7 +8,7 @@
 -- | Solution for the MWE identification shared task.
 
 
-module NLP.Departage.SharedTask
+module NLP.Traversal.SharedTask
   ( MWE
   , ParaMap
   , encodeCupt
@@ -60,25 +60,24 @@ import           Data.Hashable (Hashable)
 import qualified Data.Number.LogFloat as F
 -- import qualified Data.PrimRef as Ref
 
-import qualified NLP.Departage.Hype as H
-import qualified NLP.Departage.DepTree.Cupt as Cupt
-import qualified NLP.Departage.DepTree.AsHype as AH
-import qualified NLP.Departage.Prob as P
+import qualified NLP.Traversal.Hype as H
+import qualified NLP.Traversal.DepTree.Cupt as Cupt
+import qualified NLP.Traversal.DepTree.AsHype as AH
+import qualified NLP.Traversal.Prob as P
 
-import qualified NLP.Departage.CRF as CRF
-import           NLP.Departage.CRF (gradOn)
-import qualified NLP.Departage.CRF.SGD as SGD
-import           NLP.Departage.CRF.SGD (sgd)
-import qualified NLP.Departage.CRF.SGD.Dataset as SGD.Dataset
-import qualified NLP.Departage.CRF.Map as Map
-import qualified NLP.Departage.CRF.Mame as Mame
+import qualified NLP.Traversal.CRF as CRF
+import           NLP.Traversal.CRF (gradOn)
+import qualified NLP.Traversal.CRF.SGD as SGD
+import           NLP.Traversal.CRF.SGD (sgd)
+import qualified NLP.Traversal.CRF.SGD.Dataset as SGD.Dataset
+import qualified NLP.Traversal.CRF.Map as Map
+import qualified NLP.Traversal.CRF.Mame as Mame
 
-import           NLP.Departage.Core (MWE, Feat(..), ParaMap)
+import           NLP.Traversal.Core (MWE, Feat(..), ParaMap)
 
--- import qualified NLP.Departage.FeatConfig as Cfg
-import qualified NLP.Departage.Config as Cfg
-import qualified NLP.Departage.Config.Feat as Cfg
-import qualified NLP.Departage.Model as Model
+import qualified NLP.Traversal.Config as Cfg
+import qualified NLP.Traversal.Config.Feat as Cfg
+import qualified NLP.Traversal.Model as Model
 
 import Debug.Trace (trace)
 

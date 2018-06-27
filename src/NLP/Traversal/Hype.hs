@@ -3,7 +3,7 @@
 -- | An implementation of a hypergraph.
 
 
-module NLP.Departage.Hype
+module NLP.Traversal.Hype
 (
 -- * Types
   Hype

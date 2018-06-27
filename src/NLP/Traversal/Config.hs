@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 
 
-module NLP.Departage.Config
+module NLP.Traversal.Config
   ( Config(..)
   ) where
 
@@ -11,7 +11,7 @@ module NLP.Departage.Config
 import           Dhall
 import qualified Data.Aeson as JSON
 
-import qualified NLP.Departage.Config.Feat as Feat
+import qualified NLP.Traversal.Config.Feat as Feat
 
 
 -- | Annotation configuration.
