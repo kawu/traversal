@@ -31,6 +31,10 @@ Then clone this repository into a local directory and use `stack` to install
 the tool by running:
 
     stack install
+    
+The above command builds the `traversal` command-line tool and (on Linux) puts
+it in the `~/.local/bin/` directory by default. Installation on Windows, even
+though not tested, should be also possible.
 
 
 Data format
