@@ -1,8 +1,9 @@
 name:               traversal
 version:            0.1.0
-synopsis:           TODO
+synopsis:           Multiword expression identification system
 description:
-    TODO
+    TRAVERSAL is a multiword expression identification system based on
+    tree-structured conditional random fields.
 license:            BSD2
 license-file:       LICENSE
 cabal-version:      >= 1.10

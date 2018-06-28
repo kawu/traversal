@@ -2,10 +2,10 @@ TRAVERSAL
 =========
 
 This repository contains an implementation of a multiword expression (MWE)
-identification system based on tree-structured conditional random fields
-(CRFs). This system participated in the [PARSEME shared task][shared-task] on
-automatic identification of verbal multiword expressions, edition 1.1, and
-ranked 1st in the general cross-lingual ranking of the closed track systems.
+identification system based on tree-structured conditional random fields. This
+system participated in the [PARSEME shared task][shared-task] on automatic
+identification of verbal multiword expressions, edition 1.1, and ranked 1st in
+the general cross-lingual ranking of the closed track systems.
 
 TRAVERSAL divides the task of MWE identification into two subsequent sub-tasks:
 
