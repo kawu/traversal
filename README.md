@@ -12,13 +12,15 @@ TRAVERSAL divides the task of MWE identification into two subsequent sub-tasks:
   * Dependency tree labeling (with two possible labels: `MWE` and `not-MWE`)
   * MWE segmentation (determining the boundaries of MWEs)
   
-For the former task, the system encodes the possible labelings of dependency trees as tree
-traversals so as to capture unary, binary, and ternary relations between nodes,
-their parents, and their siblings. Then it strives to find the globally optimal
-traversal for a given dependency tree based on the multiclass logistic
-regression model. For MWE segmentation, the system relies on a rather
-rudimentary solution -- by default, all adjacent dependency nodes marked as MWEs
-of the same category are assumed to form a single MWE occurrence.
+For the former task, the system encodes the possible labelings of dependency
+trees as tree traversals so as to capture unary, binary, and ternary relations
+between nodes, their parents, and their siblings. Then it strives to find the
+globally optimal traversal for a given dependency tree based on the multiclass
+logistic regression model.
+
+For MWE segmentation, the system relies on a rather rudimentary solution -- by
+default, all adjacent dependency nodes marked as MWEs of the same category are
+assumed to form a single MWE occurrence.
 
 
 Installation
