@@ -3,9 +3,9 @@ TRAVERSAL
 
 This repository contains an implementation of a multiword expression (MWE)
 identification system based on tree-structured conditional random fields
-(CRFs). This system participated in the [shared task][shared-task] on automatic
-identification of verbal multiword expressions, edition 1.1, and ranked 1st in
-the general cross-lingual ranking of the closed track systems.
+(CRFs). This system participated in the [PARSEME shared task][shared-task] on
+automatic identification of verbal multiword expressions, edition 1.1, and
+ranked 1st in the general cross-lingual ranking of the closed track systems.
 
 
 Installation
@@ -37,7 +37,18 @@ MWE identification. The default configuration can be found in the
 Training
 ========
 
-TODO
+Assuming that you have:
+
+  * `train.cupt`: training file with MWE annotations in the [.cupt][cupt] format,
+  * `dev.cupt`: development file with MWE annotation in the [.cupt][cupt] format (optional),
+  * `config/config.dhall`: configuration file with feature templates,
+  
+and that you wish to identify MWEs of the category `VID` (each MWE in the
+[.cupt][cupt] file should be marked with its category), then you can use the
+following command to train the corresponding model and store it in the
+`VID.model` file:
+
+    traversal train -c config/config.dhall -t train.cupt -d dev.cupt --mwe VID -m VID.model
 
 
 Tagging
