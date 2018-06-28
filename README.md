@@ -24,6 +24,16 @@ Data format
 The tool works with the [.cupt][cupt] data format.
 
 
+Configuration
+=============
+
+To train an MWE identification model, you will need to specify the configuration
+of the system first. This is done using the [Dhall][dhall] programming language.
+Configuration determines, in particular, the feature templates to be used for
+MWE identification. The default configuration can be found in the
+`config/config.dhall` file.
+
+
 Training
 ========
 
@@ -40,3 +50,4 @@ TODO
 [stack]: http://docs.haskellstack.org "Haskell Tool Stack"
 [shared-task]: http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018___lb__COLING__rb__&subpage=CONF_40_Shared_Task "PARSEME shared task - edition 1.1 (2018)"
 [cupt]: http://multiword.sourceforge.net/PHITE.php?sitesig=CONF&page=CONF_04_LAW-MWE-CxG_2018___lb__COLING__rb__&subpage=CONF_45_Format_specification "The CUPT format"
+[dhall]: https://github.com/dhall-lang/dhall-lang "Dhall"
