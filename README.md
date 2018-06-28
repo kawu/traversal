@@ -8,9 +8,11 @@ automatic identification of verbal multiword expressions, edition 1.1, and
 ranked 1st in the general cross-lingual ranking of the closed track systems.
 
 TRAVERSAL divides the task of MWE identification into two subsequent sub-tasks:
-(i) dependency tree labeling (with two possible labels: `MWE` and `not-MWE`),
-and (ii) MWE segmentation (determining the boundaries of MWEs). For the former
-task, the system encodes the possible labelings of dependency trees as tree
+
+  * Dependency tree labeling (with two possible labels: `MWE` and `not-MWE`)
+  * MWE segmentation (determining the boundaries of MWEs)
+  
+For the former task, the system encodes the possible labelings of dependency trees as tree
 traversals so as to capture unary, binary, and ternary relations between nodes,
 their parents, and their siblings. Then it strives to find the globally optimal
 traversal for a given dependency tree based on the multiclass logistic
