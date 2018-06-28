@@ -7,6 +7,17 @@ identification system based on tree-structured conditional random fields
 automatic identification of verbal multiword expressions, edition 1.1, and
 ranked 1st in the general cross-lingual ranking of the closed track systems.
 
+TRAVERSAL divides the task of MWE identification into two subsequent sub-tasks:
+(i) dependency tree labeling (with two possible labels: `MWE` and `not-MWE`),
+and (ii) MWE segmentation (determining the boundaries of MWEs). For the former
+task, the system encodes the possible labelings of dependency trees as tree
+traversals so as to capture unary, binary, and ternary relations between nodes,
+their parents, and their siblings. Then it strives to find the globally optimal
+traversal for a given dependency tree based on the multiclass logistic
+regression model. For MWE segmentation, the system relies on a rather
+rudimentary solution -- by default, all adjacent dependency nodes marked as MWEs
+of the same category are assumed to form a single MWE occurrence.
+
 
 Installation
 ============
@@ -51,11 +62,47 @@ following command to train the corresponding model and store it in the
     traversal train -c config/config.dhall -t train.cupt -d dev.cupt --mwe VID -m VID.model
 
 
-Tagging
-=======
+MWE identification
+==================
 
-TODO
+Once you train the model, you can perform MWE identification using the following
+command:
 
+    traversal tag -c config/config.dhall --mwe VID -m VID.model < test.cupt
+    
+where `test.cupt` is the input file (in the [.cupt][cupt] format). The command
+outputs the MWE identification results to `stdout.` You must use the same
+configuration (`-c config/config.dhall`) as during training.
+
+MWE annotations already present on input (if any) will be copied on output. This
+allows to annotate a single file based on several models corresponding to
+different MWE categories.
+
+
+MWE segmentation
+----------------
+
+By default, all adjacent dependency nodes marked as MWEs of the same category
+are assumed to form a single MWE occurrence. Another segmentation heuristic
+available in the system is to split each group of adjacent MWE-marked nodes into
+two (or more) distinct MWEs, depending on how many nodes with a certain POS
+value it contains.
+
+For instance, to divide each MWE-marked group into two (or more) distinct MWEs
+when it contains two (or more) verbs, use the following command:
+
+    traversal tag -c config/config.dhall --mwe VID -m VID.model --split VERB < test.cupt
+    
+Both heuristics provided in the system are rather rudimentary and we plan to
+replace them by a more advanced solution to MWE segmentation in the future.
+
+Clearing
+--------
+
+If you want to remove MWE annotations from a given `test.cupt` file, use:
+
+    traversal clear < test.cupt
+    
 
 
 [stack]: http://docs.haskellstack.org "Haskell Tool Stack"
