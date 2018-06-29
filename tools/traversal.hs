@@ -431,7 +431,7 @@ run cmd =
       let k = sum . map fst $ M.elems statMap
           n = sum . map snd $ M.elems statMap
       putStr "TOTAL => "
-      putStr $ show (fromIntegral k / fromIntegral n :: Double)
+      putStr $ show (roundTo 2 . (*100) $ fromIntegral k / fromIntegral n)
       putStr " "
       printPair (k, n)
 
@@ -481,3 +481,7 @@ main =
 
 map2 :: (a -> b) -> [[a]] -> [[b]]
 map2 = map . map
+
+
+roundTo :: Int -> Double -> Double
+roundTo n f = (fromInteger $ round $ f * (10^n)) / (10.0^^n)
