@@ -12,7 +12,7 @@ import           Data.String (fromString)
 import           Data.List (sortBy)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
--- import qualified Data.Text.IO as T
+import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy.IO as TL
 
 import           System.FilePath (isAbsolute, (</>))
@@ -72,6 +72,15 @@ data Command
         -- ^ Original file
       , systemFile :: FilePath
         -- ^ File with missing tokens
+      }
+    | Conn
+      { seqModel :: Bool
+        -- ^ Use sequential model instead of dependency tree
+      , parOnly :: Bool
+        -- ^ Consider nodes adjacent only in case of the parent/child relation
+        -- (and not in case of the sibling relation)
+      , checkSep :: Bool
+        -- ^ Not only check that MWEs are connected, but also separated
       }
 
 
@@ -192,6 +201,23 @@ clearOptions :: Parser Command
 clearOptions = pure Clear
 
 
+connOptions :: Parser Command
+connOptions = Conn
+  <$> switch
+        ( long "seq"
+       <> help "Use sequential model instead of dependency tree"
+        )
+  <*> switch
+        ( long "par"
+       <> short 'p'
+       <> help "Consider nodes adjacent only in case of the parent/child relation"
+        )
+  <*> switch
+        ( long "sep"
+       <> help "Not only check that MWEs are connected, but also separated"
+        )
+
+
 depStatsOptions :: Parser Command
 depStatsOptions = pure DepStats
 
@@ -246,6 +272,10 @@ opts = subparser
     <> command "mwestats"
     (info (helper <*> mweStatsOptions)
       (progDesc "Show MWE statistics")
+    )
+    <> command "conn"
+    (info (helper <*> connOptions)
+      (progDesc "Compute the percentage of connected MWEs")
     )
   )
 
@@ -378,6 +408,32 @@ run cmd =
       xs <- Cupt.parseCupt <$> TL.getContents
       let ys = map2 Task.removeMweAnnotations xs
       TL.putStrLn (Cupt.renderCupt ys)
+
+    Conn{..} -> do
+      xs <- map Cupt.decorate . concat . Cupt.parseCupt
+        <$> TL.getContents
+      let cfg = Task.defaultConnCfg
+            { Task.connSeq = seqModel
+            , Task.connParOnly = parOnly
+            , Task.connCheckSep = checkSep
+            }
+          statMap = Task.connectedMWEs' cfg xs
+          printPair (x, y) = do
+            putStr "("
+            putStr $ show x
+            putStr "/"
+            putStr $ show y
+            putStrLn ")"
+      forM_ (M.toList statMap) $ \(mweCat, (k, n)) -> do
+        T.putStr mweCat
+        putStr " => "
+        printPair (k, n)
+      let k = sum . map fst $ M.elems statMap
+          n = sum . map snd $ M.elems statMap
+      putStr "TOTAL => "
+      putStr $ show (fromIntegral k / fromIntegral n :: Double)
+      putStr " "
+      printPair (k, n)
 
     DepStats -> do
       xs <- map Cupt.decorate . concat . Cupt.parseCupt

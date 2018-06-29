@@ -31,6 +31,12 @@ module NLP.Traversal.SharedTask
   , depRelStats
   , mweStats
   , readDataWith
+
+  -- ** Connected MWEs
+  , ConnCfg(..)
+  , defaultConnCfg
+  , connectedMWEs
+  , connectedMWEs'
   ) where
 
 
@@ -1149,6 +1155,138 @@ mweStats
 
 
 ----------------------------------------------
+-- Stats: connected MWEs
+----------------------------------------------
+
+
+data ConnCfg = ConnCfg
+  { connSeq :: Bool
+    -- ^ Use sequential model instead of dependency tree
+  , connParOnly :: Bool
+    -- ^ Consider nodes adjacent only in case of the parent/child relation
+    -- (and not in case of the sibling relation)
+  , connCheckSep :: Bool
+    -- ^ Not only check that MWEs are connected, but also separated
+  }
+
+
+-- | Default config.
+defaultConnCfg :: ConnCfg
+defaultConnCfg = ConnCfg
+  { connSeq = False
+  , connParOnly = False
+  , connCheckSep = False
+  }
+
+
+-- | A version of `connectedMWEs` which takes entire dataset on input.
+connectedMWEs' :: ConnCfg -> [Cupt.Sent] -> M.Map T.Text (Int, Int)
+connectedMWEs' cfg =
+  let addPair (x1, y1) (x2, y2) = (x1 + x2, y1 + y2)
+  in  M.unionsWith addPair . map (connectedMWEs cfg)
+
+
+-- | Compute, for each MWE category:
+--
+--     * The number of connected MWEs
+--     * The total number of MWEs
+--
+connectedMWEs :: ConnCfg -> Cupt.Sent -> M.Map T.Text (Int, Int)
+connectedMWEs ConnCfg{..} sent = M.fromListWith addPair $ do
+
+  (mweID, (tokIDs, mweTyp)) <- M.toList mweMap
+  let connected =
+        if isConnected (S.toList tokIDs) &&
+           (connCheckSep `implies` isSeparated mweID tokIDs mweTyp)
+        then 1
+        else 0
+  return (mweTyp, (connected, 1))
+
+  where
+
+    -- position-wise (+)
+    addPair (x1, y1) (x2, y2) = (x1 + x2, y1 + y2)
+
+    -- dependency tree
+    depTree =
+      if connSeq
+      then encodeCuptSeq sent
+      else encodeCupt sent
+
+    -- MWE map
+    mweMap = M.fromListWith merge $ do
+      (tokID, tok) <- M.toList tokMap
+      (mweID, mweCat) <- Cupt.mwe tok
+      return (mweID, (S.singleton tokID, mweCat))
+        where
+          merge (xs, mweCat) (ys, _mweCat) =
+            (S.union xs ys, mweCat)
+
+    -- tokID -> token
+    tokMap =
+      flip State.execState M.empty (visit depTree)
+      where
+        visit (R.Node (_prob, tok) subTrees) = do
+          State.modify' $ M.insert (Cupt.tokID tok) tok
+          mapM_ visit subTrees
+
+    -- parent -> children
+    chiMap =
+      flip State.execState M.empty (visit depTree)
+      where
+        visit (R.Node (_prob, parent) subTrees) = do
+          let childrenIDs = do
+                subTree <- subTrees
+                let (_prob, child) = R.rootLabel subTree
+                return $ Cupt.tokID child
+          State.modify' $ M.insert (Cupt.tokID parent) childrenIDs
+          mapM_ visit subTrees
+
+    -- child -> parent
+    parMap = M.fromList $ do
+      (parID, chiIDs) <- M.toList chiMap
+      chiID <- chiIDs
+      return (chiID, parID)
+
+    -- node -> left sibling
+    leftMap = M.fromList $ do
+      (_parID, chiIDs) <- M.toList chiMap
+      (left, right) <- zip chiIDs (tail chiIDs)
+      return (right, left)
+
+    -- Are the two tokIDs adjacent?
+    isAdjacent tokID tokID' =
+      isParent tokID tokID' ||
+      isParent tokID' tokID ||
+      (not connParOnly && isSibling tokID tokID')
+
+    isParent parID tokID =
+      M.lookup tokID parMap == Just parID
+
+    isSibling tokID tokID' =
+      M.lookup tokID leftMap == Just tokID' ||
+      M.lookup tokID' leftMap == Just tokID
+
+    -- Is the given set of tokIDs connected?
+    isConnected [] = error "SharedTask.connected: this case doesn't make sense"
+    isConnected (tokID : tokIDs) = isConn [tokID] tokIDs
+
+    isConn _conn [] = True
+    isConn conn rest
+      | null newConn = False
+      | otherwise = isConn newConn newRest
+      where
+        (newConn, newRest) =
+          L.partition (\x -> any (isAdjacent x) conn) rest
+
+    isSeparated mweID tokIDs mweTyp = and $ do
+      (mweID', (tokIDs', mweTyp')) <- M.toList mweMap
+      guard $ mweID /= mweID'
+      guard $ mweTyp == mweTyp'
+      return . not $ isConn (S.toList tokIDs) (S.toList tokIDs')
+
+
+----------------------------------------------
 -- Case lifting
 ----------------------------------------------
 
@@ -1262,3 +1400,7 @@ copyUpos1 =
 
 map2 :: (a -> b) -> [[a]] -> [[b]]
 map2 = map . map
+
+
+implies :: Bool -> Bool -> Bool
+implies p q = if p then q else True
