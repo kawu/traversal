@@ -8,6 +8,10 @@ module NLP.Traversal.Config.Feat
   , SisterOption(..)
   , GrandpaOption(..)
   , Set(..)
+
+  -- NEW
+  , IOBConfig(..)
+  , IOBFeatConfig(..)
   ) where
 
 
@@ -16,6 +20,11 @@ import qualified Data.Vector as V
 
 import           Dhall
 import qualified Data.Aeson as JSON
+
+
+------------------------------
+-- Feature Configuration
+------------------------------
 
 
 -- | Feature configuration.
@@ -137,6 +146,43 @@ instance Interpret GrandpaOption
 
 instance JSON.FromJSON GrandpaOption
 instance JSON.ToJSON GrandpaOption where
+  toEncoding = JSON.genericToEncoding JSON.defaultOptions
+
+
+------------------------------
+-- Feature Configuration: NEW
+------------------------------
+
+
+-- | Should the IOB marker be ignored?
+data IOBConfig
+  = IOB
+    -- ^ Distinguish 'I' from 'B'
+  | IO
+    -- ^ Don't distinguish 'I' from 'B'
+  deriving (Generic, Show, Eq, Ord)
+
+
+instance Interpret IOBConfig
+
+instance JSON.FromJSON IOBConfig
+instance JSON.ToJSON IOBConfig where
+  toEncoding = JSON.genericToEncoding JSON.defaultOptions
+
+
+-- | Feature configuration.
+data IOBFeatConfig = IOBFeatConfig
+  { iobUnaryOptions :: Set (UnaryOption, IOBConfig)
+  , iobParentOptions :: Set (ParentOption, IOBConfig)
+  , iobSisterOptions :: Set (SisterOption, IOBConfig)
+  , iobGrandpaOptions :: Set (GrandpaOption, IOBConfig)
+  } deriving (Generic, Show, Eq, Ord)
+
+
+instance Interpret IOBFeatConfig
+
+instance JSON.FromJSON IOBFeatConfig
+instance JSON.ToJSON IOBFeatConfig where
   toEncoding = JSON.genericToEncoding JSON.defaultOptions
 
 

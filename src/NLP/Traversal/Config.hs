@@ -3,6 +3,7 @@
 
 module NLP.Traversal.Config
   ( Config(..)
+  , NewConfig(..)
   ) where
 
 
@@ -33,4 +34,21 @@ instance Interpret Config
 
 instance JSON.FromJSON Config
 instance JSON.ToJSON Config where
+  toEncoding = JSON.genericToEncoding JSON.defaultOptions
+
+
+----------------------------------------------
+-- Tagging
+----------------------------------------------
+
+
+-- | Annotation configuration.
+data NewConfig = NewConfig
+  { featConfig :: Feat.IOBFeatConfig
+  } deriving (Generic, Show)
+
+instance Interpret NewConfig
+
+instance JSON.FromJSON NewConfig
+instance JSON.ToJSON NewConfig where
   toEncoding = JSON.genericToEncoding JSON.defaultOptions

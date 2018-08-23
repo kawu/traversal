@@ -49,16 +49,10 @@ data Command
         -- ^ Feature configuration path
       , modelPath :: FilePath
         -- ^ Model directory
---       , inpPath :: FilePath
---         -- ^ Dataset to tag
---       , outPath :: FilePath
---         -- ^ Output file
       , bestPath :: Bool
         -- ^ Use best path instead of marginals
       , mweType :: Maybe T.Text
         -- ^ Load a simple model and focus on a single MWE type
-      , splitOn :: Maybe T.Text
-        -- ^ Split MWEs on a given POS tag
       }
     | LiftCase
     | PrepareSL
@@ -152,18 +146,6 @@ tagOptions = Tag
        <> short 'm'
        <> help "Model directory/file"
         )
---   <*> strOption
---         ( metavar "INPUT"
---        <> long "input"
---        <> short 'i'
---        <> help "Input file"
---         )
---   <*> strOption
---         ( metavar "OUTPUT"
---        <> long "output"
---        <> short 'o'
---        <> help "Output file"
---         )
   <*> switch
         ( long "bestpath"
        <> short 'b'
@@ -173,11 +155,6 @@ tagOptions = Tag
         ( metavar "MWE-TYPE"
        <> long "mwe"
        <> help "Focus on a particular MWE type"
-        )
-  <*> (optional . strOption)
-        ( metavar "SPLIT"
-       <> long "split"
-       <> help "Split MWEs on a given POS tag"
         )
 
 
@@ -291,6 +268,24 @@ run cmd =
 
   case cmd of
 
+--     Tag{..} -> do
+--       let configPath' =
+--             if isAbsolute configPath
+--             then configPath
+--             else "./" </> configPath
+--           tagConfig = Task.TagConfig
+--             { tagBestPath = bestPath
+--             , splitMwesOn = splitOn }
+--       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
+--       case mweType of
+--         Nothing -> do
+--           model <- Model.loadEnsemble modelPath
+--           putStr "# MWE types: " >> print (Model.mweTypSet model)
+--           Task.tagEnsemble config tagConfig model -- inpPath outPath
+--         Just mweTyp -> do
+--           model <- Model.loadSimple modelPath
+--           Task.tagSimple config tagConfig mweTyp model -- inpPath outPath
+
     Tag{..} -> do
       let configPath' =
             if isAbsolute configPath
@@ -298,16 +293,13 @@ run cmd =
             else "./" </> configPath
           tagConfig = Task.TagConfig
             { tagBestPath = bestPath
-            , splitMwesOn = splitOn }
+            , splitMwesOn = Nothing }
       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
       case mweType of
-        Nothing -> do
-          model <- Model.loadEnsemble modelPath
-          putStr "# MWE types: " >> print (Model.mweTypSet model)
-          Task.tagEnsemble config tagConfig model -- inpPath outPath
+        Nothing -> error "not supported anymore!"
         Just mweTyp -> do
-          model <- Model.loadSimple modelPath
-          Task.tagSimple config tagConfig mweTyp model -- inpPath outPath
+          model <- Model.loadIOB modelPath
+          Task.tagIOB config tagConfig mweTyp model
 
     Train{..} -> do
       let configPath' =
@@ -316,16 +308,30 @@ run cmd =
             else "./" </> configPath
       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
       case mweType of
-        Nothing -> do
-          model <- Task.trainEnsemble config trainPath devPath
-          case modelPathMay of
-            Just path -> Model.saveEnsemble model path
-            Nothing -> return ()
+        Nothing -> error "not supported anymore!"
         Just mweTyp -> do
-          model <- Task.trainSimple config mweTyp trainPath devPath
+          model <- Task.trainSimpleIOB config mweTyp trainPath devPath
           case modelPathMay of
-            Just path -> Model.saveSimple model path
+            Just path -> Model.saveIOB model path
             Nothing -> return ()
+
+--     Train{..} -> do
+--       let configPath' =
+--             if isAbsolute configPath
+--             then configPath
+--             else "./" </> configPath
+--       config <- Dhall.detailed (Dhall.input Dhall.auto $ fromString configPath')
+--       case mweType of
+--         Nothing -> do
+--           model <- Task.trainEnsemble config trainPath devPath
+--           case modelPathMay of
+--             Just path -> Model.saveEnsemble model path
+--             Nothing -> return ()
+--         Just mweTyp -> do
+--           model <- Task.trainSimple config mweTyp trainPath devPath
+--           case modelPathMay of
+--             Just path -> Model.saveSimple model path
+--             Nothing -> return ()
 
     Merge{..} -> do
       xss <- Cupt.readCupt origFile

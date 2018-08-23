@@ -15,11 +15,13 @@ module NLP.Traversal.SharedTask
   , encodeTypeAmbiguity
   , retrieveTypes
   -- , retrieveTypes'
+  , trainSimpleIOB
   , trainSimple
   , trainEnsemble
   , TagConfig(..)
   , tagEnsemble
   , tagSimple
+  , tagIOB
 
   -- * Utils
   , liftCase
@@ -79,7 +81,7 @@ import qualified NLP.Traversal.CRF.SGD.Dataset as SGD.Dataset
 import qualified NLP.Traversal.CRF.Map as Map
 import qualified NLP.Traversal.CRF.Mame as Mame
 
-import           NLP.Traversal.Core (MWE, Feat(..), ParaMap)
+import           NLP.Traversal.Core (MWE, IOB(..), Feat(..), ParaMap)
 
 import qualified NLP.Traversal.Config as Cfg
 import qualified NLP.Traversal.Config.Feat as Cfg
@@ -135,38 +137,6 @@ encodeCupt toks0 =
     toks = filter Cupt.chosen toks0
 
 
--- -- | Encode a Cupt sentence as a "sequential" dependency tree, i.e., a
--- -- dependency tree which is structurally equivalent to a sequence.
--- encodeCuptSeq :: Cupt.Sent -> Maybe (AH.DepTree MWE Cupt.Token)
--- encodeCuptSeq = mkT
---
---   where
---
---     mkT toks =
---       case toks of
---         [] -> Nothing
---         tok : rest -> Just $ node (tokLabel tok) (goF rest)
---
---     goF toks =
---       case toks of
---         [] -> []
---         tok : rest -> catMaybes
---           [ Just $ leaf (tokLabel tok)
---           , mkT rest
---           ]
---
---     tokLabel tok = (, tok) $
---       if Cupt.mwe tok == []
---       then P.fromList [(True, 0.0), (False, 1.0)]
---       else P.fromList [(True, 1.0), (False, 0.0)]
---
---     node label subTrees = R.Node
---       { R.rootLabel = label
---       , R.subForest = subTrees
---       }
---     leaf label = node label []
-
-
 -- | Encode a Cupt sentence as a "sequential" dependency tree, i.e., a
 -- dependency tree which is structurally equivalent to a sequence.
 encodeCuptSeq :: Cupt.Sent -> AH.DepTree MWE Cupt.Token
@@ -193,26 +163,6 @@ encodeCuptSeq sent =
       , R.subForest = subTrees
       }
     leaf label = node label []
-
-
--- -- | Decode a Cupt sentence from a dependency tree.
--- decodeCupt :: AH.DepTree MWE Cupt.Token -> Cupt.Sent
--- decodeCupt =
---   L.sortBy (comparing position) . R.flatten . fmap decodeTok
---   where
---     position tok = case Cupt.tokID tok of
---       Cupt.TokID x -> (x, -1)
---       Cupt.TokIDRange x y -> (x, x - y)
---     decodeTok (prob, tok) =
---       case M.lookup True (P.unProb prob) of
---         Just p  ->
---           if p > 0.5
---           then tok {Cupt.mwe = [(1, T.pack $ "MWE:" ++ show p)]}
---           else tok {Cupt.mwe = []}
---         Nothing -> tok {Cupt.mwe = []}
--- --       case M.lookupMax (P.unProb prob) of
--- --         Just (True, _) -> tok {Cupt.mwe = [(0, Just "MWE")]}
--- --         _ -> tok {Cupt.mwe = []}
 
 
 -- | Decode a Cupt sentence from a dependency tree.
@@ -262,14 +212,6 @@ decodeCupt inputTree
       k <- State.get
       State.put (k+1)
       return (k, typ)
-
-
--- -- | For .cupt decoding which tries to distinguish adjacent MWEs.
--- data Prev mwe
---   = None
---   | Verb mwe
---   | Other mwe
---   deriving (Show, Eq, Ord)
 
 
 -- | Decode a Cupt sentence from a dependency tree.
@@ -331,11 +273,108 @@ maxMweID =
       xs -> Max . maximum $ map fst xs
 
 
+----------------------------------------------
+-- Encoding/decoding with IOB
+----------------------------------------------
 
--- -- | Add MWE identifiers so that adjacent (in the tree sense) MWEs have the same
--- -- ID, while non-adjacent MWEs are considered as different instances.
--- addMweIDsStupid :: Cupt.Sent -> Cupt.Sent
--- addMweIDsStupid sent =
+
+-- | Encode a Cupt sentence as a dependency tree.
+encodeCuptIOB :: Cupt.Sent -> AH.DepTree IOB Cupt.Token
+encodeCuptIOB toks0 =
+
+  -- case S.toList (childMap M.! Cupt.TokID 0) of
+  case S.toList (childMap M.! Cupt.rootParID) of
+    [rootID] -> go S.empty rootID
+    _ -> error "SharedTask.encodeCupt: several roots?"
+
+  where
+
+    go parMweIDs tokID = R.Node
+      { R.rootLabel = (tokLabel, tok)
+      , R.subForest = subForest
+      }
+      where
+        tok = tokMap M.! tokID
+        curMweIDs = S.fromList (map fst $ Cupt.mwe tok)
+        tokLabel =
+          if Cupt.mwe tok == []
+          then P.fromList [(B, 0.0), (I, 0.0), (O, 1.0)]
+          else
+            if S.null (curMweIDs `S.intersection` parMweIDs)
+            then P.fromList [(B, 1.0), (I, 0.0), (O, 0.0)]
+            else P.fromList [(B, 0.0), (I, 1.0), (O, 0.0)]
+--           if Cupt.mwe tok == []
+--           then P.fromList [(True, 0.0), (False, 1.0)]
+--           else P.fromList [(True, 1.0), (False, 0.0)]
+        subForest =
+          case M.lookup tokID childMap of
+            Nothing -> []
+            Just children -> map (go curMweIDs) (S.toList children)
+
+    childMap =
+      M.fromListWith S.union
+      [ (Cupt.dephead tok, S.singleton $ Cupt.tokID tok)
+      | tok <- toks ]
+    tokMap =
+      M.fromList
+      [ (Cupt.tokID tok, tok)
+      | tok <- toks ]
+
+    -- only segmentation-chosen tokens
+    toks = filter Cupt.chosen toks0
+
+
+-- | Decode a Cupt sentence from a dependency tree.
+-- Does not overwrite the existing annotations.
+decodeCuptIOB
+  :: Cupt.MweTyp
+     -- ^ Type of annotations to add
+  -> AH.DepTree IOB Cupt.Token
+  -> Cupt.Sent
+decodeCuptIOB mweTyp inputTree
+  = L.sortBy (comparing position)
+  . concatMap R.flatten
+  . flip State.evalState (maxMweID inputTree + 1)
+  . decodeTree
+  $ inputTree
+  where
+    position tok = case Cupt.tokID tok of
+      Cupt.TokID x -> (x, -1)
+      Cupt.TokIDRange x y -> (x, x - y)
+    decodeTree tree = decode Nothing [tree]
+    decode _ [] = return []
+    decode parent (tree : forest) = do
+      let (prob, tok) = R.rootLabel tree
+          subTrees = R.subForest tree
+      case listToMaybe . reverse . L.sortBy (comparing snd) $ M.toList (P.unProb prob) of
+        Just (I, _) -> do
+          mwe <- case parent of
+            Nothing -> withNewID
+            Just x  -> return x
+          subTrees' <- decode (Just mwe) subTrees
+          forest'   <- decode  parent    forest
+          -- DO NOT OVERWRITE ANNOTATION!
+          let root' = tok {Cupt.mwe = mwe : Cupt.mwe tok}
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+        Just (B, _) -> do
+          mwe <- withNewID
+          subTrees' <- decode (Just mwe) subTrees
+          forest'   <- decode  parent    forest
+          -- DO NOT OVERWRITE ANNOTATION!
+          let root' = tok {Cupt.mwe = mwe : Cupt.mwe tok}
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+        _ -> do
+          subTrees' <- decode Nothing subTrees
+          forest'   <- decode parent  forest
+          let root' = tok -- DO NOT OVERWRITE ANNOTATION!
+              tree' = R.Node root' subTrees'
+          return $ tree' : forest'
+    withNewID = do
+      k <- State.get
+      State.put (k+1)
+      return (k, mweTyp)
 
 
 ----------------------------------------------
@@ -352,7 +391,7 @@ maxMweID =
 
 
 -- | Encode MWE-type ambiguity for nodes marked as (untyped) MWEs (more
--- precisely, for those nodes for which the the probability of being an MWE is >
+-- precisely, for those nodes for which the probability of being an MWE is >
 -- 0.5).
 encodeTypeAmbiguity
 --   :: Purpose
@@ -679,6 +718,305 @@ featuresIn globCfg cfg encoded =
 
 
 ----------------------------------------------
+-- Feature extraction: NEW
+----------------------------------------------
+
+
+-- | Retrieve the list of features for the given sentence/arc pair.
+featuresInIOB
+  :: Cfg.IOBFeatConfig
+  -> AH.EncHype IOB Cupt.Token
+  -> H.Arc -> [Feat IOB]
+featuresInIOB cfg encoded =
+
+  \arcID ->
+    let arcHead = H.head arcID hype
+        arcTail = H.tail arcID hype
+        featList =
+          mkUnary arcHead ++
+          concatMap (mkBinary arcHead) (S.toList arcTail)
+    in featList
+
+  where
+
+    hype =  AH.encHype encoded
+
+    mkBinary arcHead arcTail
+      | isSister = collectSisterIOB
+          (Cfg.unSet $ Cfg.iobSisterOptions cfg)
+          (headTok, AH.origLabel headMWE)
+          (tailTok, AH.origLabel tailMWE)
+      | otherwise = do
+          granTok <- maybeToList $ AH.encParent encoded arcHead
+          granMWE <- maybeToList $ AH.parentLabel headMWE
+          collectGrandpaIOB
+            (Cfg.unSet $ Cfg.iobGrandpaOptions cfg)
+            (granTok, granMWE)
+            (tailTok, AH.origLabel tailMWE)
+      where
+        headMWE = AH.encLabel encoded arcHead
+        headTok = AH.encToken encoded (AH.encNode encoded arcHead)
+        tailMWE = AH.encLabel encoded arcTail
+        tailTok = AH.encToken encoded (AH.encNode encoded arcTail)
+        isSister = Cupt.dephead tailTok /= Cupt.tokID headTok
+
+    mkUnary arcHead =
+      let
+        headMWE = AH.encLabel encoded arcHead
+        headTok = AH.encToken encoded (AH.encNode encoded arcHead)
+        unary = collectUnaryIOB
+          (Cfg.unSet $ Cfg.iobUnaryOptions cfg)
+          (headTok, AH.origLabel headMWE)
+        binary = concat . maybeToList $ do
+          parTok <- AH.encParent encoded arcHead
+          parMwe <- AH.parentLabel headMWE
+          return $ collectParentIOB
+            (Cfg.unSet $ Cfg.iobParentOptions cfg)
+            (parTok, parMwe)
+            (headTok, AH.origLabel headMWE)
+      in
+        unary ++ binary
+
+
+-- | Collect unary features for a given token/MWE pair.
+collectUnaryIOB
+  :: S.Set (Cfg.UnaryOption, Cfg.IOBConfig)
+  -> (Cupt.Token, IOB)
+  -> [Feat IOB]
+collectUnaryIOB options (tok, mweIOB) =
+  map collect (S.toList options)
+  where
+    collect (option, iob) = case option of
+      Cfg.UnaryOrth -> UnaryOrth
+        { currTag = mwe
+        , currOrth = Cupt.orth tok
+        }
+      Cfg.UnaryLemma -> UnaryLemma
+        { currTag = mwe
+        , currLemma = Cupt.lemma tok
+        }
+      Cfg.UnaryPos -> UnaryPos
+        { currTag = mwe
+        , currPos = Cupt.upos tok
+        }
+      Cfg.UnaryDepRel -> UnaryDepRel
+        { currTag = mwe
+        , currRel = Cupt.deprel tok
+        }
+      where
+        mwe = processIOB iob mweIOB
+
+
+-- | Collect binary parent features.
+collectParentIOB
+  :: S.Set (Cfg.ParentOption, Cfg.IOBConfig)
+  -> (Cupt.Token, IOB) -- ^ Parent
+  -> (Cupt.Token, IOB) -- ^ Current
+  -> [Feat IOB]
+collectParentIOB options (parTok, parMweIOB) (curTok, curMweIOB) =
+  map collect (S.toList options)
+  where
+    collect (option, iob) = case option of
+      Cfg.ParentOrth -> ParentOrth
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentOrth = Cupt.orth parTok
+        , currOrth = Cupt.orth curTok
+        }
+      Cfg.ParentLemma -> ParentLemma
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentLemma = Cupt.lemma parTok
+        , currLemma = Cupt.lemma curTok
+        }
+
+      Cfg.ParentLemmaParentPosCurrentDepRel -> ParentLemmaParentPosCurrentDepRel
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentLemma = Cupt.lemma parTok
+        , currPos = Cupt.upos curTok
+        , currRel = Cupt.deprel curTok
+        }
+
+      Cfg.ParentLemmaCurrentPosParentDepRel -> ParentLemmaCurrentPosParentDepRel
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentPos = Cupt.upos parTok
+        , currLemma = Cupt.lemma curTok
+        , currRel = Cupt.deprel curTok
+        }
+
+      Cfg.ParentLemmaParent -> ParentLemmaParent
+        { parentTag = parMwe
+        , currTag = curMwe
+        , parentLemma = Cupt.lemma parTok
+        }
+      Cfg.ParentLemmaCurrent -> ParentLemmaCurrent
+        { parentTag = parMwe
+        , currTag = curMwe
+        , currLemma = Cupt.lemma curTok
+        }
+      Cfg.ParentTagsOnly -> ParentTagsOnly
+        { parentTag = parMwe
+        , currTag = curMwe
+        }
+      Cfg.ParentTagsAndDepRel -> ParentTagsAndDepRel
+        { parentTag = parMwe
+        , currTag = curMwe
+        , currRel = Cupt.deprel curTok
+        }
+      Cfg.ParentUnordLemma ->
+        if Cupt.lemma parTok <= Cupt.lemma curTok
+        then BinaryUnordLemma
+             { fstTag   = parMwe
+             , fstLemma = Cupt.lemma parTok
+             , sndTag   = curMwe
+             , sndLemma = Cupt.lemma curTok }
+        else BinaryUnordLemma
+             { sndTag   = parMwe
+             , sndLemma = Cupt.lemma parTok
+             , fstTag   = curMwe
+             , fstLemma = Cupt.lemma curTok }
+      where
+        curMwe = processIOB iob curMweIOB
+        parMwe = processIOB iob parMweIOB
+
+
+
+
+-- | Collect binary sister features.
+collectSisterIOB
+  :: S.Set (Cfg.SisterOption, Cfg.IOBConfig)
+  -> (Cupt.Token, IOB) -- ^ Sister
+  -> (Cupt.Token, IOB) -- ^ Current
+  -> [Feat IOB]
+collectSisterIOB options (sisTok, sisMweIOB) (curTok, curMweIOB) =
+  map collect (S.toList options)
+  where
+    collect (option, iob) = case option of
+      Cfg.SisterOrth -> SisterOrth
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevOrth = Cupt.orth sisTok
+        , currOrth = Cupt.orth curTok
+        }
+      Cfg.SisterLemma -> SisterLemma
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevLemma = Cupt.lemma sisTok
+        , currLemma = Cupt.lemma curTok
+        }
+
+      Cfg.SisterLemmaSisterPosCurrent -> SisterLemmaSisterPosCurrent
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevLemma = Cupt.lemma sisTok
+        , currPos = Cupt.upos curTok
+        }
+
+      Cfg.SisterLemmaCurrentPosSister -> SisterLemmaCurrentPosSister
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevPos = Cupt.upos sisTok
+        , currLemma = Cupt.lemma curTok
+        }
+
+      Cfg.SisterLemmaSister -> SisterLemmaSister
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , prevLemma = Cupt.lemma sisTok
+        }
+      Cfg.SisterLemmaCurrent -> SisterLemmaCurrent
+        { prevTag = sisMwe
+        , currTag = curMwe
+        , currLemma = Cupt.lemma curTok
+        }
+      Cfg.SisterTagsOnly -> SisterTagsOnly
+        { prevTag = sisMwe
+        , currTag = curMwe
+        }
+      Cfg.SisterTagsAndDepRel -> SisterTagsAndDepRel
+        { prevTag = sisMwe
+        , prevRel = Cupt.deprel sisTok
+        , currTag = curMwe
+        , currRel = Cupt.deprel curTok
+        }
+      Cfg.SisterUnordLemma ->
+        if Cupt.lemma sisTok <= Cupt.lemma curTok
+        then BinaryUnordLemma
+             { fstTag   = sisMwe
+             , fstLemma = Cupt.lemma sisTok
+             , sndTag   = curMwe
+             , sndLemma = Cupt.lemma curTok }
+        else BinaryUnordLemma
+             { sndTag   = sisMwe
+             , sndLemma = Cupt.lemma sisTok
+             , fstTag   = curMwe
+             , fstLemma = Cupt.lemma curTok }
+      where
+        sisMwe = processIOB iob sisMweIOB
+        curMwe = processIOB iob curMweIOB
+
+
+-- | Collect binary parent features.
+collectGrandpaIOB
+  :: S.Set (Cfg.GrandpaOption, Cfg.IOBConfig)
+  -> (Cupt.Token, IOB) -- ^ Grandpa
+  -> (Cupt.Token, IOB) -- ^ Current
+  -> [Feat IOB]
+collectGrandpaIOB options (graTok, graMweIOB) (curTok, curMweIOB) =
+  map collect (S.toList options)
+  where
+    collect (option, iob) = case option of
+      Cfg.GrandpaOrth -> GrandpaOrth
+        { granTag = graMwe
+        , currTag = curMwe
+        , granOrth = Cupt.orth graTok
+        , currOrth = Cupt.orth curTok
+        }
+      Cfg.GrandpaLemma -> GrandpaLemma
+        { granTag = graMwe
+        , currTag = curMwe
+        , granLemma = Cupt.lemma graTok
+        , currLemma = Cupt.lemma curTok
+        }
+      Cfg.GrandpaTagsOnly -> GrandpaTagsOnly
+        { granTag = graMwe
+        , currTag = curMwe
+        }
+      Cfg.GrandpaTagsAndDepRel -> GrandpaTagsAndDepRel
+        { granTag = graMwe
+        , currTag = curMwe
+        , currRel = Cupt.deprel curTok
+        }
+      Cfg.GrandpaUnordLemma ->
+        if Cupt.lemma graTok <= Cupt.lemma curTok
+        then BinaryUnordLemma
+             { fstTag   = graMwe
+             , fstLemma = Cupt.lemma graTok
+             , sndTag   = curMwe
+             , sndLemma = Cupt.lemma curTok }
+        else BinaryUnordLemma
+             { sndTag   = graMwe
+             , sndLemma = Cupt.lemma graTok
+             , fstTag   = curMwe
+             , fstLemma = Cupt.lemma curTok }
+      where
+        graMwe = processIOB iob graMweIOB
+        curMwe = processIOB iob curMweIOB
+
+
+-- | Process an IOB tag according to the config.
+processIOB :: Cfg.IOBConfig -> IOB -> IOB
+processIOB  cfg iob =
+  case cfg of
+    Cfg.IOB -> iob
+    Cfg.IO -> case iob of
+      B -> I
+      x -> x
+
+
+----------------------------------------------
 -- CRF element
 ----------------------------------------------
 
@@ -701,6 +1039,20 @@ mkElem globCfg cfg encoded =
   }
   where
     -- featsIn = map (, 1) . featuresIn cfg encoded
+
+
+-- | Create a CRF training/tagging element.
+mkElemIOB
+  :: Cfg.IOBFeatConfig
+  -> AH.EncHype IOB Cupt.Token
+  -> CRF.Elem (Feat IOB) F.LogFloat
+mkElemIOB cfg encoded =
+  CRF.Elem
+  { CRF.elemHype = AH.encHype encoded
+  , CRF.elemProb = F.logFloat <$> AH.encArcProb encoded
+  , CRF.elemFeat = map (, 1) . featuresInIOB cfg encoded
+  }
+  where
 
 
 ----------------------------------------------
@@ -752,6 +1104,119 @@ train globCfg cfg sgdArgsT trainData devData = do
 
   -- transforming data to the CRF form
   let fromSent = mkElem globCfg cfg . AH.encodeTree
+
+  -- enrich the dataset elements with potential functions, based on the current
+  -- parameter values (and using `defaultPotential`)
+  let withPhi xs = do
+        paraPure <- liftIO $ Map.unsafeFreeze paraMap
+        let crf x = F.logToLogFloat $ case paraPure x of
+              Nothing -> 0
+              Just v  -> v
+        return $ do
+          x@CRF.Elem{..} <- xs
+          let phi = CRF.defaultPotential crf elemFeat
+          return (x, phi)
+--         forM xs $ \x@CRF.Elem{..} -> do
+--           phi <- CRF.defaultPotential crf elemHype elemFeat
+--           return (x, phi)
+
+  -- dataset probability
+  let dataProb dataset = do
+        -- batch <- withPhi =<< liftIO (map fromSent <$> trainData)
+        batch <- withPhi (map fromSent dataset)
+        return . F.logFromLogFloat . product $ map (uncurry CRF.probability) batch
+
+  -- notification function
+  let notify k
+        | doneTotal k == doneTotal (k - 1) =
+            liftIO $ putStr "."
+        | otherwise = do
+            -- parameters
+            liftIO $ do
+              putStrLn ""
+              Map.toMap paraMap >>= \m -> do
+                putStr "num param: " >> print (M.size m)
+                let sortParams = L.sort . M.elems
+                putStr "min param: " >> print (take 1 $ sortParams m)
+                putStr "max param: " >> print (take 1 . reverse $ sortParams m)
+                -- let sortParams = L.sortBy (comparing snd) . M.toList
+                -- putStrLn "min params: " >> mapM_ print (take 10 $ sortParams m)
+                -- putStrLn "max params: " >> mapM_ print (take 10 . reverse $ sortParams m)
+                -- putStrLn "params: " >> mapM_ print (sortParams m)
+            -- probability
+            liftIO $ putStr "train probability: "
+            liftIO . print =<< dataProb trainData
+            liftIO $ putStr "dev probability: "
+            liftIO . print =<< dataProb devData
+
+  -- gradient computation
+  let computeGradient grad batch0 = do
+        batch <- withPhi $ map fromSent batch0
+        gradOn batch grad
+--         liftIO $ do
+--           putStrLn "# GRADIENT"
+--           gradMap <- Ref.readPrimRef $ Map.unRefMap grad
+--           print gradMap
+
+  -- Buffer creation
+  let makeBuff = Mame.Make
+        { Mame.mkValueBuffer = Map.fromMap $ featMap () -- Map.newRefMap M.empty
+        , Mame.mkDoubleBuffer = Map.fromMap $ featMap () -- Map.newRefMap M.empty
+        }
+
+  -- pureTrainData <- trainData
+  let pureTrainData = trainData
+  SGD.Dataset.withVect pureTrainData $ \dataSet -> do
+    -- TODO: change the type of `sgd` so that it runs internally `runMame` with
+    -- provided `makeBuff`
+    Mame.runMame makeBuff $ do
+      sgd
+        sgdArgsT
+        notify
+        computeGradient
+        dataSet
+        paraMap
+
+  return paraMap
+
+
+-- | Train disambiguation module.
+trainIOB
+  :: Cfg.IOBFeatConfig
+  -> SGD.SgdArgs                  -- ^ SGD configuration
+  -> [AH.DepTree IOB Cupt.Token]  -- ^ Training data
+  -> [AH.DepTree IOB Cupt.Token]  -- ^ Development data
+  -> IO (ParaMap IOB)
+trainIOB cfg sgdArgsT trainData devData = do
+  hSetBuffering stdout NoBuffering
+
+  -- parameters, helpers
+  let
+    trainSize = length trainData
+    batchSize = SGD.batchSize sgdArgsT
+
+    doneTotal :: Int -> Int
+    doneTotal = floor . done
+
+    done :: Int -> Double
+    done i
+        = fromIntegral (i * batchSize)
+        / fromIntegral trainSize
+
+  -- list of features in the training dataset
+  let featSet = S.fromList $ do
+        sent <- trainData
+        let enc = AH.encodeTree sent
+        arc <- (S.toList . H.arcs) (AH.encHype enc)
+        featuresInIOB cfg enc arc
+      featMap () = M.fromList . map (,0) $ S.toList featSet
+
+  -- parameter map
+  paraMap <- Map.fromMap $ featMap ()
+  -- paraMap <- Map.newRefMap M.empty
+
+  -- transforming data to the CRF form
+  let fromSent = mkElemIOB cfg . AH.encodeTree
 
   -- enrich the dataset elements with potential functions, based on the current
   -- parameter values (and using `defaultPotential`)
@@ -887,6 +1352,30 @@ trainSimple config mweTyp trainPath devPath = do
   train config (Cfg.baseFeatConfig config) sgdCfg trainData devData
 
 
+-- | Train a separate recognition model for a given MWE type.
+trainSimpleIOB
+  :: Cfg.NewConfig
+  -> Cupt.MweTyp       -- ^ Selected type
+  -> FilePath          -- ^ Training data
+  -> Maybe FilePath    -- ^ Development data
+  -> IO Model.IOBModel
+trainSimpleIOB config mweTyp trainPath devPath = do
+
+  putStrLn "# Identify MWE types"
+  typSet <- retrieveTypes . map Cupt.decorate . concat <$> Cupt.readCupt trainPath
+
+  unless (S.member mweTyp typSet) $ do
+    error "Provided type not in the set of available types!"
+
+  putStrLn $ "# Training model for: " ++ T.unpack mweTyp
+  let readData = fmap concat . readIOBDataWith (Just mweTyp) . Just
+  trainData <- readData trainPath
+  devData   <- case devPath of
+    Nothing -> return []
+    Just path -> readData path
+  trainIOB (Cfg.featConfig config) sgdCfg trainData devData
+
+
 -- | Default SGD configuration.
 sgdCfg :: SGD.SgdArgs
 sgdCfg = SGD.sgdArgsDefault
@@ -914,7 +1403,7 @@ data TagConfig = TagConfig
 -- | Tag the dependency tree given the model parameters.
 --
 -- NOTE: the input tree may have some MWE annotations. These will be ignored and
--- replaced by model-based annotations.
+-- replaced by the model-based annotations.
 tagOne
   :: (Ord mwe, Read mwe, Show mwe, Hashable mwe)
   => Cfg.Config
@@ -1009,68 +1498,74 @@ tagSimple config tagConfig mweTyp model = do
         Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
 
 
--- -- | High-level tagging function.
--- tagSimplePipe
---   :: Cfg.Config
---   -> TagConfig
---   -> Cupt.MweTyp  -- ^ MWE type to focus on
---   -> Model.SimpleModel
---   -> IO ()
--- tagSimplePipe config tagConfig mweTyp paraMap = do
---   featSet <- M.keysSet <$> Map.toMap paraMap
---   let featMap () = M.fromList . map (,0) $ S.toList featSet
---       makeBuff = Mame.Make
---         { Mame.mkValueBuffer = Map.fromMap $ featMap ()
---         , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
---         }
---   xs <- readDataWith config Nothing Nothing
---   Mame.runMame makeBuff $ do
---     Pipes.runEffect $ do
---       Pipes.for (Pipes.each xs) $ \inpTree -> do
---         outTree <- Pipes.lift $
---           tagOne config (Cfg.baseFeatConfig config) tagConfig paraMap inpTree
---         let txt = Cupt.renderSent . Cupt.abstract . decode $ fmap addType outTree
---         liftIO $ LT.putStrLn txt >> LT.putStrLn ""
---   where
---     addType (probMap, tok) = (,tok) . P.fromList $ do
---       (mwe, prob) <- P.toList probMap
---       return $
---         if mwe
---         then (Just mweTyp, prob)
---         else (Nothing, prob)
---     decode =
---       case splitMwesOn tagConfig of
---         Nothing -> decodeCupt
---         Just pos -> decodeCuptSplit $ \tok -> Cupt.upos tok == pos
+----------------------------------------------
+-- IOB tagging
+----------------------------------------------
 
 
--- -- | High-level tagging function with separate models.
--- tagSeparate
---   :: Cfg.Config
---   -> TagConfig
---   -> Model.SeparateModel
---   -> FilePath -- ^ Input file
---   -> FilePath -- ^ Output file
---   -> IO ()
--- tagSeparate config tagConfig model inpFile outFile = do
---   xs <- readDataWith config Nothing inpFile
+-- | High-level tagging function.
+tagIOB
+  :: Cfg.NewConfig
+  -> TagConfig
+  -> Cupt.MweTyp
+              -- ^ MWE type to focus on
+  -> Model.IOBModel
+  -> IO ()
+tagIOB config tagConfig mweTyp model = do
+  xs <- readIOBDataWith Nothing Nothing
+  ys <- tagManyIOB (Cfg.featConfig config) tagConfig model xs
+  LT.putStrLn . Cupt.renderCupt $ map2 (Cupt.abstract . decode) ys
+  where
+    decode = decodeCuptIOB mweTyp
+
+
+-- | Tag several dependency trees (using `tagOne`).
+tagManyIOB
+  :: Cfg.IOBFeatConfig
+  -> TagConfig
+  -> ParaMap IOB
+  -> [[AH.DepTree IOB Cupt.Token]]
+  -> IO [[AH.DepTree IOB Cupt.Token]]
+tagManyIOB cfg tagCfg paraMap depTrees = do
+  featSet <- M.keysSet <$> Map.toMap paraMap
+  let featMap () = M.fromList . map (,0) $ S.toList featSet
+      makeBuff = Mame.Make
+        { Mame.mkValueBuffer = Map.fromMap $ featMap ()
+        , Mame.mkDoubleBuffer = Map.fromMap $ featMap ()
+        }
+  Mame.runMame makeBuff $ do
+    mapM (mapM (tagOneIOB cfg tagCfg paraMap)) depTrees
+
+
+-- | Tag the dependency tree given the model parameters.
 --
---   let tagger = tagWithMany $ do
---         mweTyp <- S.toList $ Model.mweTypSet model
---         let paraMap = Model.paraMaps model M.! mweTyp
---         return $ tagMany (Cfg.baseFeatConfig config) tagConfig
---
---   ys <- map (encodeTypeAmbiguity $ Model.mweTypSet model)
---     <$> tagMany (Cfg.baseFeatConfig config) tagConfig (Model.paraMapBase model)  xs
---   zs <- tagMany (Cfg.mweFeatConfig  config) tagConfig (Model.paraMapMwe model) ys
---   Cupt.writeCupt (map (Cupt.abstract . decodeCupt) zs) outFile
---
---   where
---
---     tagWithMany taggers xs =
---       case taggers of
---         [] -> xs
---         tag : rest -> foldThem rest (tag xs)
+-- NOTE: the input tree may have some MWE annotations. These will be ignored and
+-- replaced by the model-based annotations.
+tagOneIOB
+  :: Cfg.IOBFeatConfig
+  -> TagConfig
+  -> ParaMap IOB
+  -> AH.DepTree IOB Cupt.Token
+  -> Mame.Mame (Map.IndiMap IO) (Feat IOB) F.LogFloat IO (AH.DepTree IOB Cupt.Token)
+tagOneIOB cfg TagConfig{..} paraMap depTree = do
+  let encTree = AH.encodeTree depTree
+      crfElem = mkElemIOB cfg encTree
+  -- START: computing arc potentials (UNSAFELY?)
+  paraPure <- liftIO $ Map.unsafeFreeze paraMap
+  let crf x = F.logToLogFloat $ case paraPure x of
+        Nothing -> 0
+        Just v  -> v
+      phi = CRF.defaultPotential crf (CRF.elemFeat crfElem)
+  -- END: computing arc potentials
+  let (prob, _) = CRF.marginals phi (AH.encHype encTree)
+      nodeSet = CRF.bestPath phi (AH.encHype encTree)
+      depTree' =
+        if tagBestPath
+        then AH.decodeTree' encTree nodeSet
+        else AH.decodeTree encTree prob
+  return depTree'
+
+
 
 
 ----------------------------------------------
@@ -1111,6 +1606,28 @@ readDataWith config mayMweTyp mayPath = do
       if Cfg.sequential config
       then encodeCuptSeq
       else encodeCupt
+
+
+-- | Read Cupt data from a given file (or <stdin> if `Nothing`).
+readIOBDataWith
+  :: Maybe Cupt.MweTyp
+    -- ^ Ignore MWEs of all other types (if supplied)
+  -> Maybe FilePath
+  -> IO [[AH.DepTree IOB Cupt.Token]]
+readIOBDataWith mayMweTyp mayPath = do
+  map (map procSent) <$> case mayPath of
+    Just path -> Cupt.readCupt path
+    Nothing -> Cupt.parseCupt <$> LT.getContents
+  where
+    procSent
+      = encodeIt
+      . discardOtherMWEs
+      . Cupt.decorate
+    discardOtherMWEs =
+      case mayMweTyp of
+        Nothing -> id
+        Just mweTyp -> Cupt.preserveOnly mweTyp
+    encodeIt = encodeCuptIOB
 
 
 -- | Clear all MWE annotations.

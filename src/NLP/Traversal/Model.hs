@@ -9,6 +9,10 @@ module NLP.Traversal.Model
   , SimpleModel (..)
   , saveSimple
   , loadSimple
+
+  , IOBModel (..)
+  , saveIOB
+  , loadIOB
   ) where
 
 
@@ -97,6 +101,24 @@ loadSimple filePath = Map.load keyEnc filePath
 --   <$> Map.load keyEnc (dirPath </> basePath)
 --   <*> Map.load keyEnc (dirPath </> mwePath)
 --   <*> (read <$> readFile (dirPath </> typPath))
+
+
+----------------------------------------------
+-- IOB
+----------------------------------------------
+
+
+type IOBModel = Core.ParaMap Core.IOB
+
+
+-- | Save IOB model in the given file.
+saveIOB :: IOBModel -> FilePath -> IO ()
+saveIOB paraMap filePath = Map.save keyEnc paraMap filePath
+
+
+-- | Load IOB model from the given directory.
+loadIOB :: FilePath -> IO IOBModel
+loadIOB filePath = Map.load keyEnc filePath
 
 
 ----------------------------------------------

@@ -103,8 +103,6 @@ data Label a = Label
   , parentLabel :: Maybe a
     -- ^ Label assigned to the parent (if any); performs the function of a
     -- memory cell
---   , arcLabel :: b
---     -- ^ The original label assigned to the arc between the node and its parent
   } deriving (Show, Eq, Ord)
 
 

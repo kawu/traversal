@@ -3,6 +3,7 @@
 
 module NLP.Traversal.Core
   ( MWE
+  , IOB(..)
   , Feat(..)
   , ParaMap
   ) where
@@ -23,6 +24,16 @@ import qualified NLP.Traversal.CRF.Map as Map
 
 -- | Information about MWE
 type MWE = Bool
+
+
+-- | An IOB tag.
+data IOB
+  = B -- ^ Begin
+  | I -- ^ Inside
+  | O -- ^ Outside
+  deriving (Generic, Show, Read, Ord, Eq)
+
+instance Hashable IOB
 
 
 ----------------------------------------------
